@@ -713,13 +713,19 @@ async function fetchNews(forceRefresh = false) {
 
   const today = new Date().toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric'});
 
-  // ── システムプロンプト（簡潔に絞る）─────────
-  const system = `ニュースキュレーター。今日(${today})のAM7:00時点の最新ニュース8件をウェブ検索し、JSONのみ返せ。余分なテキスト不要。
-重要: 必ず取得日当日(${today})のニュースのみ選ぶこと。前日以前の古い記事は除外すること。
-{"news":[{"id":1,"category":"国内/国際/経済/社会/テクノロジー/スポーツ","title":"30字以内","summary":"80字以内","source":"媒体名"}]}
-国内4件・国際4件。`;
+  // ── システムプロンプト ───────────────────────
+  const system = `あなたはニュースキュレーターです。
+ウェブ検索で${today}のニュースを収集し、以下のJSON形式のみで返してください。
+説明文・謝罪文・マークダウン記法は一切不要です。必ずJSONだけ返してください。
 
-  const userMsg = `${today}当日のニュース8件をJSON形式で。必ず当日の記事のみ。`;
+{"news":[{"id":1,"category":"国内/国際/経済/社会/テクノロジー/スポーツ","title":"30字以内の見出し","summary":"80字以内の要約","source":"媒体名"}]}
+
+条件:
+- 合計8件（国内4件・国際4件）
+- ${today}当日のニュースを優先。当日分が不足の場合は直近のニュースで補完してよい
+- どんな状況でも必ずJSON形式で返すこと。返せない場合でもJSONの骨格を維持すること`;
+
+  const userMsg = `${today}の主要ニュース8件をJSON形式で返してください。`;
 
   async function callAPI(messages) {
     const res = await fetch(API_URL, {
@@ -731,8 +737,8 @@ async function fetchNews(forceRefresh = false) {
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001', // ① Haikuでコスト削減（Sonnetの約1/20）
-        max_tokens: 2000,                    // ② 8件JSONに必要な上限に絞る
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 2500,
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         system,
         messages
@@ -745,13 +751,15 @@ async function fetchNews(forceRefresh = false) {
     return res.json();
   }
 
-  try {
+  // マルチターンでfinalTextを取得
+  async function fetchFinalText() {
     const d1 = await callAPI([{ role:'user', content: userMsg }]);
-    let finalText = '';
 
     if (d1.stop_reason === 'end_turn') {
-      finalText = extractText(d1.content);
-    } else if (d1.stop_reason === 'tool_use') {
+      return extractText(d1.content);
+    }
+
+    if (d1.stop_reason === 'tool_use') {
       setMsg('検索結果を要約中...');
       const toolResults = d1.content
         .filter(b => b.type === 'tool_use')
@@ -762,18 +770,68 @@ async function fetchNews(forceRefresh = false) {
         { role:'assistant', content: d1.content  },
         { role:'user',      content: toolResults }
       ]);
-      finalText = extractText(d2.content);
+
+      // d2もtool_useだった場合はもう一段
+      if (d2.stop_reason === 'tool_use') {
+        setMsg('最終処理中...');
+        const tr2 = d2.content
+          .filter(b => b.type === 'tool_use')
+          .map(b => ({ type:'tool_result', tool_use_id: b.id, content: b.content || '' }));
+        const d3 = await callAPI([
+          { role:'user',      content: userMsg     },
+          { role:'assistant', content: d1.content  },
+          { role:'user',      content: toolResults },
+          { role:'assistant', content: d2.content  },
+          { role:'user',      content: tr2         }
+        ]);
+        return extractText(d3.content);
+      }
+
+      return extractText(d2.content);
     }
 
-    if (!finalText) throw new Error('レスポンスが空です');
+    return extractText(d1.content);
+  }
 
-    const parsed = safeParseNews(finalText);
+  try {
+    const finalText = await fetchFinalText();
+
+    if (!finalText) throw new Error('AIからの応答が空です');
+
+    // JSON部分だけ抽出を試みる（謝罪文が混入しても対応）
+    let parsed;
+    try {
+      parsed = safeParseNews(finalText);
+    } catch {
+      // JSONが見つからない場合はリトライ（JSONのみ要求）
+      setMsg('再試行中...');
+      const retryRes = await fetch(API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 2500,
+          system: 'JSONのみ返せ。説明不要。',
+          messages: [
+            { role:'user', content: userMsg },
+            { role:'assistant', content: finalText },
+            { role:'user', content: '上記の内容をJSON形式{"news":[...]}のみで出力し直してください。説明文は不要です。' }
+          ]
+        })
+      });
+      const retryData = await retryRes.json();
+      parsed = safeParseNews(extractText(retryData.content));
+    }
+
     allNews = parsed.news || [];
     if (!allNews.length) throw new Error('ニュースデータが空です');
 
-    // ③ 当日キャッシュに保存
     saveCache(allNews);
-
     filteredNews = [...allNews];
     renderNews(filteredNews);
     updateTicker(allNews);
