@@ -714,11 +714,12 @@ async function fetchNews(forceRefresh = false) {
   const today = new Date().toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric'});
 
   // ── システムプロンプト（簡潔に絞る）─────────
-  const system = `ニュースキュレーター。今日(${today})の主要ニュース8件をウェブ検索し、JSONのみ返せ。余分なテキスト不要。
+  const system = `ニュースキュレーター。今日(${today})のAM7:00時点の最新ニュース8件をウェブ検索し、JSONのみ返せ。余分なテキスト不要。
+重要: 必ず取得日当日(${today})のニュースのみ選ぶこと。前日以前の古い記事は除外すること。
 {"news":[{"id":1,"category":"国内/国際/経済/社会/テクノロジー/スポーツ","title":"30字以内","summary":"80字以内","source":"媒体名"}]}
 国内4件・国際4件。`;
 
-  const userMsg = `${today}のニュース8件をJSON形式で。`;
+  const userMsg = `${today}当日のニュース8件をJSON形式で。必ず当日の記事のみ。`;
 
   async function callAPI(messages) {
     const res = await fetch(API_URL, {
@@ -846,6 +847,20 @@ function filterNews(cat, el) {
 // ════════════════════════════════════
 // TTS
 // ════════════════════════════════════
+
+// HTMLタグ・読み上げ不要な記号を除去
+function cleanForTTS(text) {
+  return (text || '')
+    .replace(/<[^>]*>/g, '')        // HTMLタグ除去
+    .replace(/&[a-z]+;/gi, '')      // HTMLエンティティ除去（&amp; など）
+    .replace(/https?:\/\/\S+/g, '') // URLを除去
+    .replace(/[=+*#@^~|]/g, '')    // 記号除去（=,+,*,#など）
+    .replace(/\/+/g, '')           // スラッシュ除去
+    .replace(/_{2,}/g, '')          // アンダースコア連続除去
+    .replace(/\s+/g, ' ')          // 空白を正規化
+    .trim();
+}
+
 function speakItem(i) {
   if (!isReading || i >= filteredNews.length) { finishReading(); return; }
 
@@ -865,7 +880,9 @@ function speakItem(i) {
   // Progress
   document.getElementById('progressLine').style.width = `${((i+1)/total)*100}%`;
 
-  const utt = new SpeechSynthesisUtterance(`${item.category}。${item.title}。${item.summary}`);
+  // HTMLタグ・記号を除去してから読み上げ
+  const spokenText = `${cleanForTTS(item.category)}。${cleanForTTS(item.title)}。${cleanForTTS(item.summary)}`;
+  const utt = new SpeechSynthesisUtterance(spokenText);
   utt.lang   = 'ja-JP';
   utt.rate   = parseFloat(document.getElementById('rateSlider').value);
   utt.volume = parseFloat(document.getElementById('volSlider').value);
