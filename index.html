@@ -721,11 +721,13 @@ async function fetchNews(forceRefresh = false) {
 {"news":[{"id":1,"category":"国内/国際/経済/社会/テクノロジー/スポーツ","title":"30字以内の見出し","summary":"80字以内の要約","source":"媒体名"}]}
 
 条件:
-- 合計8件（国内4件・国際4件）
+- カテゴリーは「国内」「国際」「経済」「社会」「テクノロジー」「スポーツ」の6種類
+- 各カテゴリーごとに1件以上9件以下で収集すること
+- ${today}当日のニュースが存在するカテゴリーのみ収集する。記事が見つからないカテゴリーは0件でよい
 - ${today}当日のニュースを優先。当日分が不足の場合は直近のニュースで補完してよい
 - どんな状況でも必ずJSON形式で返すこと。返せない場合でもJSONの骨格を維持すること`;
 
-  const userMsg = `${today}の主要ニュース8件をJSON形式で返してください。`;
+  const userMsg = `${today}の主要ニュースをカテゴリー別（国内・国際・経済・社会・テクノロジー・スポーツ）に各1〜9件でJSON形式で返してください。記事がないカテゴリーは省略可。`;
 
   async function callAPI(messages) {
     const res = await fetch(API_URL, {
@@ -738,7 +740,7 @@ async function fetchNews(forceRefresh = false) {
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 2500,
+        max_tokens: 6000,  // 各カテゴリー最大9件×6カテゴリー対応
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         system,
         messages
