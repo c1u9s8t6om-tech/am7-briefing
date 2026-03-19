@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="AM7">
+<meta name="theme-color" content="#0a0a0a">
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<title>AM7 BRIEFING</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Noto+Sans+JP:wght@300;400;500&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink: #0a0a0a;
+  --paper: #f2ede6;
+  --accent: #c8381a;
+  --muted: #8a7f74;
+  --line: #d4cdc4;
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+html { height: 100%; }
+
+body {
+  height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Noto Sans JP', sans-serif;
+  font-weight: 300;
+  overflow-x: hidden;
+  /* ノッチ対応 */
+  padding-top: var(--sat);
+  padding-left: var(--sal);
+  padding-right: var(--sar);
+}
+
+/* ── HEADER ── */
+header {
+  background: var(--paper);
+  border-bottom: 3px solid var(--ink);
+  padding: 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: 58px;
+}
+.masthead {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 42px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+.masthead em { color: var(--accent); font-style: normal; }
+.header-right { text-align: right; }
+.header-date {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  letter-spacing: .12em;
+  color: var(--muted);
+  text-transform: uppercase;
+  line-height: 1.6;
+}
+.header-updated {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  color: var(--muted);
+}
+
+/* ── TICKER ── */
+.ticker {
+  background: var(--ink);
+  color: var(--paper);
+  overflow: hidden;
+  white-space: nowrap;
+  height: 28px;
+  display: flex;
+  align-items: center;
+}
+.ticker-inner {
+  display: inline-block;
+  animation: ticker 60s linear infinite;
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: .1em;
+  padding-left: 100%;
+}
+
+/* ── NOW PLAYING BAR ── */
+#nowPlayingBar {
+  background: var(--ink);
+  color: var(--paper);
+  padding: 9px 16px;
+  display: none;
+  align-items: center;
+  gap: 10px;
+  position: sticky;
+  top: 58px;
+  z-index: 99;
+}
+#nowPlayingBar.show { display: flex; }
+.pdot {
+  width: 7px; height: 7px;
+  background: var(--accent);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: pdot 1.4s ease-in-out infinite;
+}
+#npTitle {
+  flex: 1;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#npIdx {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+/* ── PROGRESS LINE ── */
+#progressLine {
+  height: 3px;
+  background: var(--accent);
+  width: 0%;
+  transition: width .3s;
+  position: sticky;
+  top: calc(58px);
+  z-index: 98;
+}
+
+/* ── FILTER TABS ── */
+.filter-wrap {
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.filter-wrap::-webkit-scrollbar { display: none; }
+.filter-tabs { display: flex; white-space: nowrap; }
+.ftab {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  border: none;
+  border-bottom: 2.5px solid transparent;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  padding: 11px 14px;
+  cursor: pointer;
+  transition: all .15s;
+  flex-shrink: 0;
+}
+.ftab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── FEED ── */
+#feedHeader {
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.feed-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 17px;
+  letter-spacing: .05em;
+}
+.badge {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  background: var(--accent);
+  color: #fff;
+  padding: 2px 6px;
+  letter-spacing: .1em;
+}
+
+/* ── STATES ── */
+.loading-state, .empty-state {
+  padding: 60px 20px;
+  text-align: center;
+}
+.spinner {
+  width: 30px; height: 30px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  margin: 0 auto 14px;
+}
+.state-msg {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: .08em;
+  line-height: 2;
+}
+.empty-icon { font-size: 44px; opacity: .4; margin-bottom: 14px; }
+
+/* ── NEWS CARD ── */
+.news-card {
+  padding: 16px 16px 16px 19px;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  transition: background .1s;
+  position: relative;
+  user-select: none;
+}
+.news-card:active { background: rgba(200,56,26,.05); }
+.news-card.reading {
+  background: rgba(255,213,79,.13);
+  border-left-color: var(--accent);
+}
+.card-num {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 28px;
+  color: var(--line);
+  position: absolute;
+  right: 13px; top: 13px;
+  line-height: 1;
+}
+.card-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.card-cat {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  font-weight: 400;
+}
+.card-src {
+  font-family: 'DM Mono', monospace;
+  font-size: 9px;
+  color: var(--muted);
+  background: var(--line);
+  padding: 1px 5px;
+}
+.card-title {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.5;
+  margin-bottom: 6px;
+  padding-right: 32px;
+}
+.card-summary {
+  font-size: 12px;
+  line-height: 1.9;
+  color: #444;
+}
+
+/* ── BOTTOM BAR ── */
+#bottomBar {
+  position: fixed;
+  bottom: 0; left: 0; right: 0;
+  background: var(--paper);
+  border-top: 2px solid var(--ink);
+  padding: 10px 14px;
+  padding-bottom: calc(10px + var(--sab));
+  display: flex;
+  gap: 8px;
+  z-index: 100;
+  align-items: stretch;
+}
+.bb-icon {
+  font-family: 'DM Mono', monospace;
+  font-size: 18px;
+  border: 1.5px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  padding: 0 12px;
+  cursor: pointer;
+  border-radius: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .15s;
+  min-height: 46px;
+}
+.bb-icon:active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.bb-btn {
+  flex: 1;
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  border: 1.5px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  padding: 0 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  transition: all .15s;
+  min-height: 46px;
+}
+.bb-btn:active { background: var(--ink); color: var(--paper); }
+.bb-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.bb-btn.primary:active { background: #a02e14; }
+.bb-btn:disabled { opacity: .35; pointer-events: none; }
+
+/* フィード下余白（ボトムバー分）*/
+#feedWrap { padding-bottom: calc(74px + var(--sab)); }
+
+/* ── MODAL ── */
+.modal-bg {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 200;
+  display: flex;
+  align-items: flex-end;
+  padding: 0;
+  transition: opacity .2s;
+}
+.modal-bg.hidden { display: none; }
+.modal-sheet {
+  background: var(--paper);
+  width: 100%;
+  padding: 28px 22px calc(24px + var(--sab));
+  border-top: 3px solid var(--ink);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.modal-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 26px;
+  letter-spacing: .05em;
+  margin-bottom: 6px;
+}
+.modal-sub {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: .07em;
+  line-height: 1.9;
+  margin-bottom: 20px;
+}
+.modal-input {
+  width: 100%;
+  font-family: 'DM Mono', monospace;
+  font-size: 13px;
+  border: 1.5px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  padding: 12px 14px;
+  outline: none;
+  letter-spacing: .04em;
+  margin-bottom: 14px;
+}
+.modal-input:focus { border-color: var(--accent); }
+.modal-actions { display: flex; gap: 10px; }
+.modal-btn {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  border: 1.5px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  padding: 13px 16px;
+  cursor: pointer;
+  flex: 1;
+}
+.modal-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ── VOICE SHEET ── */
+#voiceSheet {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 200;
+  display: flex;
+  align-items: flex-end;
+}
+#voiceSheet.hidden { display: none; }
+.voice-inner {
+  background: var(--paper);
+  width: 100%;
+  padding: 24px 22px calc(20px + var(--sab));
+  border-top: 3px solid var(--ink);
+}
+.voice-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 22px;
+  letter-spacing: .05em;
+  margin-bottom: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.voice-close {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.voice-rows { display: flex; flex-direction: column; gap: 20px; }
+.voice-row label {
+  font-family: 'DM Mono', monospace;
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  display: block;
+  margin-bottom: 10px;
+}
+input[type=range] {
+  width: 100%;
+  accent-color: var(--accent);
+  height: 4px;
+}
+
+/* ── ANIMATIONS ── */
+@keyframes spin   { to { transform: rotate(360deg); } }
+@keyframes ticker { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes pdot   { 0%,100% { opacity:1; } 50% { opacity:.25; } }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="masthead">AM<em>7</em></div>
+  <div class="header-right">
+    <div class="header-date" id="headerDate"></div>
+    <div class="header-updated" id="lastUpdated">—</div>
+  </div>
+</header>
+
+<!-- PROGRESS LINE -->
+<div id="progressLine"></div>
+
+<!-- TICKER -->
+<div class="ticker">
+  <div class="ticker-inner" id="tickerInner">
+    ニュースを取得中...&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;LOADING NEWS...&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ニュースを取得中...&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;LOADING NEWS...
+  </div>
+</div>
+
+<!-- NOW PLAYING -->
+<div id="nowPlayingBar">
+  <span class="pdot"></span>
+  <span id="npTitle">—</span>
+  <span id="npIdx"></span>
+</div>
+
+<!-- FILTER -->
+<div class="filter-wrap">
+  <div class="filter-tabs">
+    <button class="ftab active" onclick="filterNews('all',this)">ALL</button>
+    <button class="ftab" onclick="filterNews('国内',this)">国内</button>
+    <button class="ftab" onclick="filterNews('国際',this)">国際</button>
+    <button class="ftab" onclick="filterNews('経済',this)">経済</button>
+    <button class="ftab" onclick="filterNews('社会',this)">社会</button>
+    <button class="ftab" onclick="filterNews('テクノロジー',this)">Tech</button>
+    <button class="ftab" onclick="filterNews('スポーツ',this)">Sports</button>
+  </div>
+</div>
+
+<!-- FEED HEADER -->
+<div id="feedHeader">
+  <span class="feed-title">TODAY'S HEADLINES</span>
+  <span class="badge" id="newsCount">0</span>
+</div>
+
+<!-- FEED -->
+<div id="feedWrap">
+  <div class="empty-state">
+    <div class="empty-icon">📰</div>
+    <div class="state-msg">🔑 をタップしてAPIキーを設定し<br>「取得」ボタンを押してください</div>
+  </div>
+</div>
+
+<!-- BOTTOM BAR -->
+<div id="bottomBar">
+  <button class="bb-icon" onclick="openKeyModal()" title="APIキー設定">🔑</button>
+  <button class="bb-btn primary" id="fetchBtn" onclick="fetchNews()">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <polyline points="23 4 23 10 17 10"/>
+      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+    </svg>
+    取得
+  </button>
+  <button class="bb-btn" id="readAllBtn" onclick="readAll()" disabled>
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <polygon points="5 3 19 12 5 21 5 3"/>
+    </svg>
+    読み上げ
+  </button>
+  <button class="bb-btn" id="stopBtn" onclick="stopReading()" style="display:none">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <rect x="6" y="4" width="4" height="16"/>
+      <rect x="14" y="4" width="4" height="16"/>
+    </svg>
+    停止
+  </button>
+  <button class="bb-icon" onclick="openVoice()" title="音声設定">⚙️</button>
+</div>
+
+<!-- API KEY MODAL -->
+<div class="modal-bg hidden" id="keyModal" onclick="bgClose(event,'keyModal')">
+  <div class="modal-sheet">
+    <div class="modal-title">🔑 API KEY</div>
+    <div class="modal-sub">
+      Anthropic の API キーを入力してください。<br>
+      キーはこのデバイスにのみ保存され、外部には送信されません。<br>
+      取得先: console.anthropic.com
+    </div>
+    <input class="modal-input" type="password" id="apiKeyInput"
+      placeholder="sk-ant-api03-..." autocomplete="off"
+      onkeydown="if(event.key==='Enter')saveKey()">
+    <div class="modal-actions">
+      <button class="modal-btn primary" onclick="saveKey()">保存</button>
+      <button class="modal-btn" onclick="closeModal('keyModal')">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- VOICE SHEET -->
+<div id="voiceSheet" class="hidden" onclick="bgClose(event,'voiceSheet')">
+  <div class="voice-inner">
+    <div class="voice-title">
+      VOICE
+      <button class="voice-close" onclick="closeModal('voiceSheet')">✕ 閉じる</button>
+    </div>
+    <div class="voice-rows">
+      <div class="voice-row">
+        <label id="rateLabel">読み上げ速度: 1.0x</label>
+        <input type="range" min="0.7" max="1.8" step="0.1" value="1.0" id="rateSlider"
+          oninput="document.getElementById('rateLabel').textContent='読み上げ速度: '+parseFloat(this.value).toFixed(1)+'x';saveVoice()">
+      </div>
+      <div class="voice-row">
+        <label id="volLabel">音量: 100%</label>
+        <input type="range" min="0" max="1" step="0.1" value="1.0" id="volSlider"
+          oninput="document.getElementById('volLabel').textContent='音量: '+Math.round(this.value*100)+'%';saveVoice()">
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════
+// CONSTANTS
+// ════════════════════════════════════
+const API_URL = 'https://api.anthropic.com/v1/messages';
+const CAT_COLOR = {
+  '国内':'#c8381a','国際':'#1a6bc8','経済':'#2a9d44',
+  '社会':'#7b4fc8','テクノロジー':'#c87b1a','スポーツ':'#c8a01a'
+};
+
+// ════════════════════════════════════
+// STATE
+// ════════════════════════════════════
+let allNews = [], filteredNews = [];
+let isReading = false;
+
+// ════════════════════════════════════
+// INIT
+// ════════════════════════════════════
+(function init() {
+  // 日付
+  const now  = new Date();
+  document.getElementById('headerDate').textContent =
+    now.toLocaleDateString('ja-JP',{month:'short',day:'numeric',weekday:'short'}).toUpperCase();
+
+  // APIキー復元
+  const key = localStorage.getItem('am7_key');
+  if (key) document.getElementById('apiKeyInput').value = key;
+  else setTimeout(openKeyModal, 500);
+
+  // 音声設定復元
+  const vRate = localStorage.getItem('am7_rate');
+  const vVol  = localStorage.getItem('am7_vol');
+  if (vRate) {
+    document.getElementById('rateSlider').value = vRate;
+    document.getElementById('rateLabel').textContent = '読み上げ速度: ' + parseFloat(vRate).toFixed(1) + 'x';
+  }
+  if (vVol) {
+    document.getElementById('volSlider').value = vVol;
+    document.getElementById('volLabel').textContent = '音量: ' + Math.round(vVol * 100) + '%';
+  }
+
+  // Service Worker 登録
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
+})();
+
+// ════════════════════════════════════
+// MODAL
+// ════════════════════════════════════
+function openKeyModal()  { document.getElementById('keyModal').classList.remove('hidden'); }
+function openVoice()     { document.getElementById('voiceSheet').classList.remove('hidden'); }
+function closeModal(id)  { document.getElementById(id).classList.add('hidden'); }
+function bgClose(e, id)  { if (e.target === document.getElementById(id)) closeModal(id); }
+
+function saveKey() {
+  const v = document.getElementById('apiKeyInput').value.trim();
+  if (v) localStorage.setItem('am7_key', v);
+  closeModal('keyModal');
+}
+
+function saveVoice() {
+  localStorage.setItem('am7_rate', document.getElementById('rateSlider').value);
+  localStorage.setItem('am7_vol',  document.getElementById('volSlider').value);
+}
+
+// ════════════════════════════════════
+// HELPERS
+// ════════════════════════════════════
+function extractText(content) {
+  if (!Array.isArray(content)) return '';
+  return content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+}
+
+function safeParseNews(raw) {
+  const s = raw.replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
+  try { return JSON.parse(s); }
+  catch {
+    const m = s.match(/\{[\s\S]*\}/);
+    if (m) return JSON.parse(m[0]);
+    throw new Error('JSONパース失敗\n' + s.slice(0,300));
+  }
+}
+
+function setMsg(msg) {
+  const el = document.querySelector('.state-msg');
+  if (el) el.textContent = msg;
+}
+
+// ════════════════════════════════════
+// FETCH NEWS
+// ════════════════════════════════════
+async function fetchNews() {
+  const key = localStorage.getItem('am7_key') || '';
+  if (!key) { openKeyModal(); return; }
+
+  const btn = document.getElementById('fetchBtn');
+  btn.disabled = true;
+  btn.innerHTML = `
+    <div style="width:13px;height:13px;border:1.5px solid rgba(255,255,255,.4);
+      border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0"></div>取得中`;
+
+  document.getElementById('feedWrap').innerHTML = `
+    <div class="loading-state">
+      <div class="spinner"></div>
+      <div class="state-msg">ウェブを検索中...</div>
+    </div>`;
+
+  stopReading();
+
+  const today = new Date().toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric'});
+
+  const system = `あなたはニュースキュレーターです。ウェブ検索で今日(${today})の国内外の主要ニュースを収集し、必ず以下のJSONのみ返してください。前置き・後書き・コードブロック不要。
+
+{"news":[{"id":1,"category":"国内/国際/経済/社会/テクノロジー/スポーツのいずれか","title":"30文字以内の見出し","summary":"80〜120文字の要約","source":"メディア名","time":"本日"}]}
+
+条件: 8件、国内4件・国際4件バランス、JSONのみ。`;
+
+  const userMsg = `${today}の主要ニュース8件をJSONで返してください。`;
+
+  async function callAPI(messages) {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 4000,
+        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+        system,
+        messages
+      })
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(`API ${res.status}: ${txt}`);
+    }
+    return res.json();
+  }
+
+  try {
+    // ターン1
+    const d1 = await callAPI([{ role:'user', content: userMsg }]);
+    let finalText = '';
+
+    if (d1.stop_reason === 'end_turn') {
+      finalText = extractText(d1.content);
+    } else if (d1.stop_reason === 'tool_use') {
+      setMsg('検索結果を要約中...');
+      const toolResults = d1.content
+        .filter(b => b.type === 'tool_use')
+        .map(b => ({ type:'tool_result', tool_use_id: b.id, content: b.content || '' }));
+
+      const d2 = await callAPI([
+        { role:'user',      content: userMsg      },
+        { role:'assistant', content: d1.content   },
+        { role:'user',      content: toolResults  }
+      ]);
+      finalText = extractText(d2.content);
+    }
+
+    if (!finalText) throw new Error('レスポンスが空です');
+
+    const parsed = safeParseNews(finalText);
+    allNews = parsed.news || [];
+    if (!allNews.length) throw new Error('ニュースデータが空です');
+
+    filteredNews = [...allNews];
+    renderNews(filteredNews);
+    updateTicker(allNews);
+
+    const now = new Date();
+    document.getElementById('lastUpdated').textContent =
+      now.getHours() + ':' + String(now.getMinutes()).padStart(2,'0') + ' 更新';
+
+    document.getElementById('readAllBtn').disabled = false;
+
+  } catch (err) {
+    console.error('[AM7]', err);
+    document.getElementById('feedWrap').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">⚠️</div>
+        <div class="state-msg">取得に失敗しました<br>
+          <span style="font-size:10px;display:block;margin-top:8px;color:var(--accent)">${err.message.slice(0,120)}</span>
+        </div>
+      </div>`;
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = `
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <polyline points="23 4 23 10 17 10"/>
+      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+    </svg>取得`;
+}
+
+// ════════════════════════════════════
+// RENDER
+// ════════════════════════════════════
+function renderNews(news) {
+  document.getElementById('newsCount').textContent = news.length;
+  if (!news.length) {
+    document.getElementById('feedWrap').innerHTML =
+      '<div class="empty-state"><div class="state-msg">該当記事なし</div></div>';
+    return;
+  }
+  document.getElementById('feedWrap').innerHTML = news.map((item, i) => `
+    <div class="news-card" id="nc-${i}" onclick="readItem(${i})">
+      <div class="card-num">${String(i+1).padStart(2,'0')}</div>
+      <div class="card-meta">
+        <span class="card-cat" style="color:${CAT_COLOR[item.category]||'var(--accent)'}">
+          ${item.category}
+        </span>
+        <span class="card-src">${item.source||''}</span>
+      </div>
+      <div class="card-title">${item.title}</div>
+      <div class="card-summary">${item.summary}</div>
+    </div>
+  `).join('');
+}
+
+function updateTicker(news) {
+  const t = news.map(n=>`[${n.category}] ${n.title}`).join('　▶　');
+  // 2重にしてループが自然になるように
+  document.getElementById('tickerInner').textContent = t + '　　　　　' + t;
+}
+
+// ════════════════════════════════════
+// FILTER
+// ════════════════════════════════════
+function filterNews(cat, el) {
+  document.querySelectorAll('.ftab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  filteredNews = cat === 'all' ? [...allNews] : allNews.filter(n => n.category === cat);
+  renderNews(filteredNews);
+  stopReading();
+}
+
+// ════════════════════════════════════
+// TTS
+// ════════════════════════════════════
+function speakItem(i) {
+  if (!isReading || i >= filteredNews.length) { finishReading(); return; }
+
+  const item  = filteredNews[i];
+  const total = filteredNews.length;
+
+  // カード
+  document.querySelectorAll('.news-card').forEach(el => el.classList.remove('reading'));
+  const card = document.getElementById(`nc-${i}`);
+  if (card) { card.classList.add('reading'); card.scrollIntoView({behavior:'smooth',block:'nearest'}); }
+
+  // Now playing
+  document.getElementById('nowPlayingBar').classList.add('show');
+  document.getElementById('npTitle').textContent = item.title;
+  document.getElementById('npIdx').textContent   = `${i+1}/${total}`;
+
+  // Progress
+  document.getElementById('progressLine').style.width = `${((i+1)/total)*100}%`;
+
+  const utt = new SpeechSynthesisUtterance(`${item.category}。${item.title}。${item.summary}`);
+  utt.lang   = 'ja-JP';
+  utt.rate   = parseFloat(document.getElementById('rateSlider').value);
+  utt.volume = parseFloat(document.getElementById('volSlider').value);
+  utt.onend  = () => { if (isReading) speakItem(i + 1); };
+  window.speechSynthesis.speak(utt);
+}
+
+function readAll() {
+  if (!filteredNews.length) return;
+  stopReading();
+  isReading = true;
+  document.getElementById('readAllBtn').style.display = 'none';
+  document.getElementById('stopBtn').style.display    = '';
+  speakItem(0);
+}
+
+function readItem(i) {
+  stopReading();
+  isReading = true;
+  document.getElementById('readAllBtn').style.display = 'none';
+  document.getElementById('stopBtn').style.display    = '';
+  speakItem(i);
+}
+
+function stopReading() {
+  isReading = false;
+  window.speechSynthesis.cancel();
+  document.querySelectorAll('.news-card').forEach(el => el.classList.remove('reading'));
+  document.getElementById('readAllBtn').style.display = '';
+  document.getElementById('stopBtn').style.display    = 'none';
+  document.getElementById('nowPlayingBar').classList.remove('show');
+  document.getElementById('progressLine').style.width = '0%';
+}
+
+function finishReading() {
+  stopReading();
+  document.getElementById('progressLine').style.width = '100%';
+  setTimeout(() => document.getElementById('progressLine').style.width = '0%', 1800);
+}
+</script>
+</body>
+</html>
