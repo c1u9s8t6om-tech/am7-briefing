@@ -57,7 +57,7 @@ header {
 }
 .masthead {
   font-family: 'Bebas Neue', sans-serif;
-  font-size: 42px;
+  font-size: clamp(22px, 5.5vw, 38px);
   line-height: 1;
   letter-spacing: 0.02em;
 }
@@ -447,7 +447,7 @@ input[type=range] {
 
 <!-- HEADER -->
 <header>
-  <div class="masthead">AM<em>7</em></div>
+  <div class="masthead">AM<em>7</em>_BRIEFING</div>
   <div class="header-right">
     <div class="header-date" id="headerDate"></div>
     <div class="header-updated" id="lastUpdated">—</div>
@@ -501,7 +501,7 @@ input[type=range] {
 <!-- BOTTOM BAR -->
 <div id="bottomBar">
   <button class="bb-icon" onclick="openKeyModal()" title="APIキー設定">🔑</button>
-  <button class="bb-btn primary" id="fetchBtn" onclick="fetchNews()">
+  <button class="bb-btn primary" id="fetchBtn" onclick="fetchNews(false)" oncontextmenu="fetchNews(true);return false;">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
       <polyline points="23 4 23 10 17 10"/>
       <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
@@ -656,11 +656,46 @@ function setMsg(msg) {
 }
 
 // ════════════════════════════════════
+// CACHE HELPERS（当日キャッシュ）
+// ════════════════════════════════════
+const CACHE_KEY      = 'am7_cache';
+const todayDateStr   = () => new Date().toLocaleDateString('ja-JP');
+
+function loadCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const c = JSON.parse(raw);
+    // 当日のキャッシュのみ有効
+    if (c.date === todayDateStr()) return c.news;
+  } catch {}
+  return null;
+}
+
+function saveCache(news) {
+  localStorage.setItem(CACHE_KEY, JSON.stringify({ date: todayDateStr(), news }));
+}
+
+// ════════════════════════════════════
 // FETCH NEWS
 // ════════════════════════════════════
-async function fetchNews() {
+async function fetchNews(forceRefresh = false) {
   const key = localStorage.getItem('am7_key') || '';
   if (!key) { openKeyModal(); return; }
+
+  // ── キャッシュチェック ──────────────────────
+  if (!forceRefresh) {
+    const cached = loadCache();
+    if (cached) {
+      allNews = cached;
+      filteredNews = [...allNews];
+      renderNews(filteredNews);
+      updateTicker(allNews);
+      document.getElementById('readAllBtn').disabled = false;
+      document.getElementById('lastUpdated').textContent = '今日取得済（キャッシュ）';
+      return;
+    }
+  }
 
   const btn = document.getElementById('fetchBtn');
   btn.disabled = true;
@@ -678,13 +713,12 @@ async function fetchNews() {
 
   const today = new Date().toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric'});
 
-  const system = `あなたはニュースキュレーターです。ウェブ検索で今日(${today})の国内外の主要ニュースを収集し、必ず以下のJSONのみ返してください。前置き・後書き・コードブロック不要。
+  // ── システムプロンプト（簡潔に絞る）─────────
+  const system = `ニュースキュレーター。今日(${today})の主要ニュース8件をウェブ検索し、JSONのみ返せ。余分なテキスト不要。
+{"news":[{"id":1,"category":"国内/国際/経済/社会/テクノロジー/スポーツ","title":"30字以内","summary":"80字以内","source":"媒体名"}]}
+国内4件・国際4件。`;
 
-{"news":[{"id":1,"category":"国内/国際/経済/社会/テクノロジー/スポーツのいずれか","title":"30文字以内の見出し","summary":"80〜120文字の要約","source":"メディア名","time":"本日"}]}
-
-条件: 8件、国内4件・国際4件バランス、JSONのみ。`;
-
-  const userMsg = `${today}の主要ニュース8件をJSONで返してください。`;
+  const userMsg = `${today}のニュース8件をJSON形式で。`;
 
   async function callAPI(messages) {
     const res = await fetch(API_URL, {
@@ -696,8 +730,8 @@ async function fetchNews() {
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 4000,
+        model: 'claude-haiku-4-5-20251001', // ① Haikuでコスト削減（Sonnetの約1/20）
+        max_tokens: 2000,                    // ② 8件JSONに必要な上限に絞る
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         system,
         messages
@@ -711,7 +745,6 @@ async function fetchNews() {
   }
 
   try {
-    // ターン1
     const d1 = await callAPI([{ role:'user', content: userMsg }]);
     let finalText = '';
 
@@ -724,9 +757,9 @@ async function fetchNews() {
         .map(b => ({ type:'tool_result', tool_use_id: b.id, content: b.content || '' }));
 
       const d2 = await callAPI([
-        { role:'user',      content: userMsg      },
-        { role:'assistant', content: d1.content   },
-        { role:'user',      content: toolResults  }
+        { role:'user',      content: userMsg     },
+        { role:'assistant', content: d1.content  },
+        { role:'user',      content: toolResults }
       ]);
       finalText = extractText(d2.content);
     }
@@ -737,6 +770,9 @@ async function fetchNews() {
     allNews = parsed.news || [];
     if (!allNews.length) throw new Error('ニュースデータが空です');
 
+    // ③ 当日キャッシュに保存
+    saveCache(allNews);
+
     filteredNews = [...allNews];
     renderNews(filteredNews);
     updateTicker(allNews);
@@ -744,7 +780,6 @@ async function fetchNews() {
     const now = new Date();
     document.getElementById('lastUpdated').textContent =
       now.getHours() + ':' + String(now.getMinutes()).padStart(2,'0') + ' 更新';
-
     document.getElementById('readAllBtn').disabled = false;
 
   } catch (err) {
