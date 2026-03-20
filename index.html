@@ -602,6 +602,7 @@ let _wakeLock    = null;
 let _audioCtx    = null;
 let _silentSrc   = null;
 let ttsLang      = 'ja-JP';  // 実際の値はinit()内で localStorage から復元
+let translateCache = {};     // 英訳キャッシュ: { "記事id": {title_en, summary_en} }
 
 // ════════════════════════════════════
 // INIT
@@ -945,6 +946,7 @@ async function fetchNews(forceRefresh = false) {
     if (!allNews.length) throw new Error('ニュースデータが空です');
 
     console.log('[AM7] 取得成功:', allNews.length, '件');
+    translateCache = {};  // 新規取得時は翻訳キャッシュもクリア
     saveCache(allNews);
     filteredNews = [...allNews];
     renderNews(filteredNews);
@@ -1177,6 +1179,51 @@ function cleanForTTS(text) {
     .trim();
 }
 
+// ── 英訳（オンデマンド）─────────────────────────
+// 英語設定時のみ呼ばれ、結果はキャッシュに保存
+async function translateItem(item) {
+  const cacheKey = String(item.id) + item.title;
+  if (translateCache[cacheKey]) return translateCache[cacheKey]; // キャッシュヒット
+
+  const key = localStorage.getItem('am7_key') || '';
+  if (!key) return null;
+
+  try {
+    const res = await Promise.race([
+      fetch(API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': key,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 300,
+          messages: [{
+            role: 'user',
+            content: `Translate the following Japanese news into natural English. Return JSON only: {"title_en":"...","summary_en":"..."}
+Title: ${item.title}
+Summary: ${item.summary}`
+          }]
+        })
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 15000))
+    ]);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+    const cleaned = text.replace(/```(?:json)?[\s\S]*?```|```/gi, '').trim();
+    const parsed = JSON.parse(cleaned);
+    translateCache[cacheKey] = parsed;
+    return parsed;
+  } catch(e) {
+    console.warn('[AM7] 翻訳失敗:', e.message);
+    return null;
+  }
+}
+
 function speakItem(i) {
   if (!isReading || i >= filteredNews.length) { finishReading(); return; }
 
@@ -1200,14 +1247,43 @@ function speakItem(i) {
   // Media Session更新
   setupMediaSession(item.title);
 
-  // HTMLタグ・記号を除去してから読み上げ
-  const spokenText = `${cleanForTTS(item.category)}。${cleanForTTS(item.title)}。${cleanForTTS(item.summary)}`;
-  const utt = new SpeechSynthesisUtterance(spokenText);
-  utt.lang   = ttsLang;  // 言語切り替え対応（ja-JP / en-US）
-  utt.rate   = parseFloat(document.getElementById('rateSlider').value);
-  utt.volume = parseFloat(document.getElementById('volSlider').value);
-  utt.onend  = () => { if (isReading) speakItem(i + 1); };
-  window.speechSynthesis.speak(utt);
+  // 言語設定に応じて日本語/英語で読み上げ
+  function doSpeak(titleText, summaryText, lang) {
+    const spokenText = lang === 'en-US'
+      ? `${cleanForTTS(titleText)}. ${cleanForTTS(summaryText)}`
+      : `${cleanForTTS(item.category)}。${cleanForTTS(titleText)}。${cleanForTTS(summaryText)}`;
+    const utt = new SpeechSynthesisUtterance(spokenText);
+    utt.lang   = lang;
+    utt.rate   = parseFloat(document.getElementById('rateSlider').value);
+    utt.volume = parseFloat(document.getElementById('volSlider').value);
+    utt.onend  = () => { if (isReading) speakItem(i + 1); };
+    window.speechSynthesis.speak(utt);
+  }
+
+  if (ttsLang === 'en-US') {
+    // 英語設定: 翻訳してから読み上げ（キャッシュあれば即時）
+    const cacheKey = String(item.id) + item.title;
+    if (translateCache[cacheKey]) {
+      // キャッシュヒット → 即時読み上げ
+      const c = translateCache[cacheKey];
+      doSpeak(c.title_en, c.summary_en, 'en-US');
+    } else {
+      // 未翻訳 → 翻訳してから読み上げ
+      setMsg('翻訳中...');
+      translateItem(item).then(translated => {
+        if (!isReading) return; // 翻訳中に停止された場合
+        if (translated && translated.title_en) {
+          doSpeak(translated.title_en, translated.summary_en, 'en-US');
+        } else {
+          // 翻訳失敗 → 日本語にフォールバック
+          doSpeak(item.title, item.summary, 'ja-JP');
+        }
+      });
+    }
+  } else {
+    // 日本語設定
+    doSpeak(item.title, item.summary, 'ja-JP');
+  }
 }
 
 function readAll() {
