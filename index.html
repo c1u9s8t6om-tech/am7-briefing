@@ -779,8 +779,18 @@ async function fetchNews(forceRefresh = false) {
   document.getElementById('feedWrap').innerHTML = `
     <div class="loading-state">
       <div class="spinner"></div>
-      <div class="state-msg">ウェブを検索中...</div>
+      <div class="state-msg" id="loadingMsg">ウェブを検索中...</div>
+      <div style="font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);margin-top:10px;letter-spacing:.08em;" id="loadingTimer"></div>
     </div>`;
+
+  // 経過秒数カウンター（取得中に止まってないことを表示）
+  let _loadSec = 0;
+  const _loadTimer = setInterval(() => {
+    _loadSec++;
+    const el = document.getElementById('loadingTimer');
+    if (el) el.textContent = `${_loadSec}秒経過 / 最大60秒`;
+    if (_loadSec >= 60) clearInterval(_loadTimer);
+  }, 1000);
 
   stopReading();
 
@@ -802,6 +812,21 @@ async function fetchNews(forceRefresh = false) {
 
   const userMsg = `${today}のニュースをカテゴリー別にJSON形式で返してください。`;
 
+  // タイムアウト付きfetch（デフォルト60秒）
+  async function fetchWithTimeout(url, options, timeoutMs = 60000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      return res;
+    } catch (e) {
+      if (e.name === 'AbortError') throw new Error('タイムアウト（60秒）。通信環境を確認して再試行してください。');
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function callAPI(messages) {
     const bodyObj = {
       model: 'claude-haiku-4-5-20251001',
@@ -810,7 +835,7 @@ async function fetchNews(forceRefresh = false) {
       system,
       messages
     };
-    const res = await fetch(API_URL, {
+    const reqOpts = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -819,23 +844,16 @@ async function fetchNews(forceRefresh = false) {
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify(bodyObj)
-    });
+    };
+
+    const res = await fetchWithTimeout(API_URL, reqOpts, 60000);
+
     if (res.status === 429) {
       const retryAfter = parseInt(res.headers.get('retry-after') || '15', 10);
       console.warn(`[AM7] 429 レート制限検出。${retryAfter}秒待機して再試行`);
       setMsg(`レート制限中。${retryAfter}秒後に再試行...`);
       await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
-      // 待機後に同じリクエストを1回だけ再試行
-      const res2 = await fetch(API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': key,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify(bodyObj)
-      });
+      const res2 = await fetchWithTimeout(API_URL, reqOpts, 60000);
       if (!res2.ok) {
         const txt2 = await res2.text();
         throw new Error(`API ${res2.status}（再試行後）: ${txt2}`);
@@ -924,6 +942,7 @@ async function fetchNews(forceRefresh = false) {
     allNews = parsed.news || [];
     if (!allNews.length) throw new Error('ニュースデータが空です');
 
+    clearInterval(_loadTimer);
     console.log('[AM7] 取得成功:', allNews.length, '件');
     saveCache(allNews);
     filteredNews = [...allNews];
@@ -936,6 +955,7 @@ async function fetchNews(forceRefresh = false) {
     document.getElementById('readAllBtn').disabled = false;
 
   } catch (err) {
+    clearInterval(_loadTimer);
     console.error('[AM7] 取得エラー:', err);
     document.getElementById('feedWrap').innerHTML = `
       <div class="empty-state">
