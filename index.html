@@ -936,13 +936,11 @@ async function fetchNews(forceRefresh = false) {
 
     if (!finalText) throw new Error('AIからの応答が空です');
 
-    // safeParseNews が多段フォールバックで対応するので追加APIコールは不要
     const parsed = safeParseNews(finalText);
 
     allNews = parsed.news || [];
     if (!allNews.length) throw new Error('ニュースデータが空です');
 
-    clearInterval(_loadTimer);
     console.log('[AM7] 取得成功:', allNews.length, '件');
     saveCache(allNews);
     filteredNews = [...allNews];
@@ -955,7 +953,6 @@ async function fetchNews(forceRefresh = false) {
     document.getElementById('readAllBtn').disabled = false;
 
   } catch (err) {
-    clearInterval(_loadTimer);
     console.error('[AM7] 取得エラー:', err);
     document.getElementById('feedWrap').innerHTML = `
       <div class="empty-state">
@@ -964,14 +961,17 @@ async function fetchNews(forceRefresh = false) {
           <span style="font-size:10px;display:block;margin-top:8px;color:var(--accent)">${err.message.slice(0,150)}</span>
         </div>
       </div>`;
+  } finally {
+    // 成功・失敗・例外いずれでも必ずボタンを元に戻す
+    console.log('[AM7] finally: ボタンリセット');
+    clearInterval(_loadTimer);
+    btn.disabled = false;
+    btn.innerHTML = `
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <polyline points="23 4 23 10 17 10"/>
+        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+      </svg>取得`;
   }
-
-  btn.disabled = false;
-  btn.innerHTML = `
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-      <polyline points="23 4 23 10 17 10"/>
-      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-    </svg>取得`;
 }
 
 // ════════════════════════════════════
