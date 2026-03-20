@@ -579,13 +579,17 @@ input[type=range] {
 
 <script>
 // ════════════════════════════════════
-// CONSTANTS
+// CONSTANTS（TDZ防止: fetchNews/initより前に全定数を宣言）
 // ════════════════════════════════════
-const API_URL = 'https://api.anthropic.com/v1/messages';
-const CAT_COLOR = {
+const API_URL      = 'https://api.anthropic.com/v1/messages';
+const CAT_COLOR    = {
   '国内':'#c8381a','国際':'#1a6bc8','経済':'#2a9d44',
   '社会':'#7b4fc8','テクノロジー':'#c87b1a','スポーツ':'#c8a01a'
 };
+const CACHE_KEY    = 'am7_cache';
+const todayDateStr = () => new Date().toLocaleDateString('ja-JP');
+const isIOS        = /iPad|iPhone|iPod/.test(navigator.userAgent);
+const isAndroid    = /Android/.test(navigator.userAgent);
 
 // ════════════════════════════════════
 // STATE（全グローバル変数をここで宣言してTDZを防ぐ）
@@ -736,9 +740,8 @@ function setMsg(msg) {
 
 // ════════════════════════════════════
 // CACHE HELPERS（当日キャッシュ）
+// CACHE_KEY / todayDateStr は CONSTANTS セクションで宣言済み
 // ════════════════════════════════════
-const CACHE_KEY      = 'am7_cache';
-const todayDateStr   = () => new Date().toLocaleDateString('ja-JP');
 
 function loadCache() {
   try {
@@ -1027,8 +1030,7 @@ function filterNews(cat, el) {
 // ════════════════════════════════════
 
 // ── OS判定 ───────────────────────────────────
-const isIOS     = /iPad|iPhone|iPod/.test(navigator.userAgent);
-const isAndroid = /Android/.test(navigator.userAgent);
+// isIOS / isAndroid は CONSTANTS セクションで宣言済み
 
 // ════════════════════════════════════════════
 // バックグラウンド再生対応
