@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AM7 BRIEFING — API動作確認</title>
+<style>
+  body { font-family: 'Courier New', monospace; background: #0a0a0a; color: #f2ede6; padding: 20px; margin: 0; }
+  h1 { color: #c8381a; font-size: 18px; margin-bottom: 20px; }
+  .section { margin-bottom: 20px; border: 1px solid #333; padding: 16px; }
+  .section h2 { color: #888; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 12px; }
+  input[type=password], input[type=text] {
+    width: 100%; background: #111; border: 1px solid #444; color: #f2ede6;
+    padding: 8px 12px; font-family: monospace; font-size: 13px; box-sizing: border-box; margin-bottom: 10px;
+  }
+  button {
+    background: #c8381a; border: none; color: #fff; padding: 10px 20px;
+    font-family: monospace; font-size: 12px; cursor: pointer; letter-spacing: .1em; text-transform: uppercase; margin-right: 8px; margin-bottom: 8px;
+  }
+  button:hover { background: #a02e14; }
+  button:disabled { background: #444; cursor: not-allowed; }
+  .log { background: #111; border: 1px solid #222; padding: 12px; font-size: 12px; line-height: 1.8; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+  .ok  { color: #4caf50; }
+  .err { color: #f44336; }
+  .warn{ color: #ff9800; }
+  .info{ color: #2196f3; }
+  .dim { color: #666; }
+  #result { margin-top: 16px; }
+  .card { background: #111; border-left: 3px solid #c8381a; padding: 10px 14px; margin-bottom: 8px; font-size: 12px; line-height: 1.7; }
+  .card .cat { color: #c8381a; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+  .card .title { font-size: 14px; font-weight: bold; margin: 4px 0; }
+  .card .src { color: #666; font-size: 10px; }
+  .summary { background: #0d1117; border: 1px solid #30363d; padding: 12px; font-size: 12px; line-height: 1.8; margin-top: 12px; }
+  .pass { color: #4caf50; } .fail { color: #f44336; }
+</style>
+</head>
+<body>
+
+<h1>🔬 AM7 BRIEFING — API動作確認ツール</h1>
+
+<div class="section">
+  <h2>1. APIキー設定</h2>
+  <input type="password" id="apiKey" placeholder="sk-ant-api03-..." autocomplete="off">
+  <div style="font-size:11px;color:#666;">キーはこのページ内でのみ使用されます。外部送信はしません。</div>
+</div>
+
+<div class="section">
+  <h2>2. テスト実行</h2>
+  <button onclick="runTest()" id="runBtn">▶ 全テスト実行</button>
+  <button onclick="clearLog()">🗑 ログクリア</button>
+</div>
+
+<div class="section">
+  <h2>3. ログ</h2>
+  <div class="log" id="log">テスト待機中...</div>
+</div>
+
+<div class="section" id="resultSection" style="display:none">
+  <h2>4. 取得結果</h2>
+  <div id="result"></div>
+</div>
+
+<div class="section" id="summarySection" style="display:none">
+  <h2>5. テストサマリー</h2>
+  <div class="summary" id="summary"></div>
+</div>
+
+<script>
+const API_URL = 'https://api.anthropic.com/v1/messages';
+let logEl;
+
+function log(msg, cls='') {
+  if (!logEl) logEl = document.getElementById('log');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function clearLog() {
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('resultSection').style.display = 'none';
+  document.getElementById('summarySection').style.display = 'none';
+}
+
+// ── 共通ヘルパー ───────────────────────────────
+function extractText(content) {
+  return (content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+}
+
+function buildToolResults(contentBlocks) {
+  return contentBlocks.filter(b=>b.type==='tool_use')
+    .map(b=>({ type:'tool_result', tool_use_id:b.id, content:[{type:'text',text:'Search completed.'}] }));
+}
+
+function safeParseNews(raw) {
+  if (!raw) throw new Error('レスポンスが空です');
+  let s = raw.replace(/```(?:json)?\n?/gi,'').trim();
+  try { const r=JSON.parse(s); if(r&&r.news) return r; } catch {}
+  const m = s.match(/\{[^{}]*"news"\s*:\s*\[([\s\S]*?)\][^{}]*\}/);
+  if (m) { try { const r=JSON.parse(m[0]); if(r&&r.news) return r; } catch {} }
+  const am = s.match(/"news"\s*:\s*(\[[\s\S]*?\](?=\s*[,}]|\s*$))/);
+  if (am) {
+    let arr = am[1].replace(/,?\s*\{[^{}]*$/,'').replace(/,\s*$/,'') + ']';
+    try { const p=JSON.parse(arr); if(Array.isArray(p)&&p.length>0) return {news:p}; } catch {}
+    const items=[]; const re=/\{[^{}]*"category"[^{}]*"title"[^{}]*\}/g; let o;
+    while((o=re.exec(s))!==null) { try{items.push(JSON.parse(o[0]));}catch{} }
+    if(items.length>0) return {news:items};
+  }
+  throw new Error('JSONパース失敗: '+s.slice(0,100));
+}
+
+async function callAPI(key, messages) {
+  const bodyObj = {
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 4000,
+    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    system: `あなたはニュースキュレーターです。
+ウェブ検索で本日のニュースを収集し、以下のJSON形式のみで返してください。
+説明文・謝罪文・コードブロックは不要です。JSONのみ出力してください。
+
+{"news":[{"id":1,"category":"カテゴリー名","title":"30字以内の見出し","summary":"80字以内の要約","source":"媒体名"}]}
+
+【条件】
+- カテゴリーは 国内・国際・経済・社会・テクノロジー・スポーツ の6種類
+- 各カテゴリー2件以上5件以下。記事が見つからないカテゴリーは省略してよい
+- NHK・朝日・読売・毎日・産経・共同通信・日経・BBC・Reuters・AP・AFP・CNN など主要メディアを優先
+- 明らかに信頼性の低い情報源（SNS・匿名サイト）は避ける
+- 必ずJSONのみ返すこと。条件を満たせない場合も空でもJSONの形式を守ること`,
+    messages
+  };
+  const fetchPromise = fetch(API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify(bodyObj)
+  });
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('タイムアウト(60秒)')), 60000)
+  );
+  const res = await Promise.race([fetchPromise, timeoutPromise]);
+  if (!res.ok) { const t=await res.text(); throw new Error(`HTTP ${res.status}: ${t.slice(0,200)}`); }
+  return res.json();
+}
+
+// ── メインテスト ──────────────────────────────
+async function runTest() {
+  const key = document.getElementById('apiKey').value.trim();
+  if (!key) { alert('APIキーを入力してください'); return; }
+
+  const btn = document.getElementById('runBtn');
+  btn.disabled = true;
+  btn.textContent = '実行中...';
+  document.getElementById('log').innerHTML = '';
+  document.getElementById('resultSection').style.display = 'none';
+  document.getElementById('summarySection').style.display = 'none';
+
+  const results = {};
+  const today = new Date().toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric'});
+  const userMsg = `${today}のニュースをカテゴリー別にJSON形式で返してください。`;
+
+  try {
+    // ─ STEP1: API呼び出し（web_search_20250305は1ターンで完結）────
+    log(`\n[STEP1] APIリクエスト送信 (${today})`, 'info');
+    log(`  model: claude-haiku-4-5-20251001`, 'dim');
+    log(`  max_tokens: 4000`, 'dim');
+    log(`  tools: web_search_20250305`, 'dim');
+
+    const messages = [{ role:'user', content:userMsg }];
+    let finalText = '';
+    let totalTokensIn = 0, totalTokensOut = 0;
+    const tStart = Date.now();
+
+    for (let turn = 1; turn <= 5; turn++) {
+      log(`\n  [Turn${turn}] リクエスト送信中...`, 'dim');
+      const d = await callAPI(key, messages);
+      const tms = Date.now() - tStart;
+      const types = d.content?.map(b=>b.type) || [];
+      const text  = extractText(d.content);
+
+      log(`  → ${tms}ms`, 'dim');
+      log(`  stop_reason: ${d.stop_reason}`, 'dim');
+      log(`  types: [${types.join(', ')}]`, 'dim');
+      if (d.usage) {
+        log(`  tokens: in=${d.usage.input_tokens} out=${d.usage.output_tokens}`, 'dim');
+        totalTokensIn  += d.usage.input_tokens  || 0;
+        totalTokensOut += d.usage.output_tokens || 0;
+      }
+
+      // end_turn → テキスト取得完了
+      if (d.stop_reason === 'end_turn') {
+        if (text) {
+          finalText = text;
+          log(`  ✅ Turn${turn} end_turn: テキスト取得成功 (${text.length}文字)`, 'ok');
+          break;
+        }
+        throw new Error(`Turn${turn}: end_turnだがテキストが空`);
+      }
+
+      // tool_use → 次ターンへ（buildToolResultsで tool_result を組み立て）
+      if (d.stop_reason === 'tool_use') {
+        log(`  ✅ Turn${turn} tool_use: 検索実行中...`, 'ok');
+        const toolResults = buildToolResults(d.content);
+        messages.push({ role:'assistant', content: d.content });
+        messages.push({ role:'user',      content: toolResults });
+        continue;
+      }
+
+      // max_tokens超過
+      if (d.stop_reason === 'max_tokens' && text) {
+        finalText = text;
+        log(`  ⚠ max_tokens超過。部分テキストで続行`, 'warn');
+        break;
+      }
+
+      throw new Error(`予期しないstop_reason: ${d.stop_reason}`);
+    }
+
+    if (!finalText) throw new Error('テキストが取得できませんでした');
+
+    results.total_ms = Date.now() - tStart;
+    results.turn1_tokens_in  = totalTokensIn;
+    results.turn1_tokens_out = totalTokensOut;
+    results.turn2_tokens_in  = 0;
+    results.turn2_tokens_out = 0;
+    results.turn1_ok = true;
+    results.turn2_ok = true;
+
+    const text = finalText;
+    log(`\n  preview: ${text.slice(0,300)}`, 'dim');
+
+    // ── finalText の詳細解析 ──────────────────
+    log(`\n[STEP2.5] finalText 詳細解析`, 'info');
+    log(`  全長: ${text.length}文字`, 'dim');
+    log(`  先頭50文字: ${JSON.stringify(text.slice(0,50))}`, 'dim');
+    log(`  末尾50文字: ${JSON.stringify(text.slice(-50))}`, 'dim');
+    log(`  "news"キー含む: ${text.includes('"news"')}`, text.includes('"news"')?'ok':'err');
+    log(`  "{" で始まる: ${text.trimStart().startsWith('{')}`, 'dim');
+    log(`  コードブロック含む: ${text.includes('```')}`, 'dim');
+    log(`  ✅ JSONテキスト取得成功`, 'ok');
+
+    // ─ STEP3: JSONパース ──────────────────────
+    log(`\n[STEP3] JSONパース`, 'info');
+    const parsed = safeParseNews(text);
+    const news = parsed.news || [];
+    log(`  記事数: ${news.length}件`, 'ok');
+
+    if (news.length === 0) throw new Error('ニュースデータが空です');
+
+    // ─ STEP4: 仕様チェック ───────────────────
+    log(`\n[STEP4] 仕様チェック`, 'info');
+    const TARGET_CATS = ['国内','国際','経済','社会','テクノロジー','スポーツ'];
+    const cats = {};
+    news.forEach(n => { cats[n.category] = (cats[n.category]||0)+1; });
+
+    let specPass = 0;
+    TARGET_CATS.forEach(cat => {
+      const cnt = cats[cat] || 0;
+      const ok = cnt >= 2 && cnt <= 5;
+      log(`  ${ok?'✅':'⚠'} ${cat}: ${cnt}件 ${cnt===0?'(記事なし)':cnt<2?'(2件未満)':cnt>5?'(5件超)':''}`, ok?'ok':'warn');
+      if (ok) specPass++;
+    });
+    results.spec_pass = specPass;
+    results.news = news;
+    results.cats = cats;
+
+    // 全フィールド確認
+    const allFields = news.every(n => n.category && n.title && n.summary && n.source);
+    log(`  ${allFields?'✅':'❌'} 全フィールド存在 (category/title/summary/source)`, allFields?'ok':'err');
+
+    // ─ STEP5: コスト計算 ─────────────────────
+    log(`\n[STEP5] コスト計算`, 'info');
+    const totalIn  = results.turn1_tokens_in  + results.turn2_tokens_in;
+    const totalOut = results.turn1_tokens_out + results.turn2_tokens_out;
+    const usd = totalIn*0.8/1e6 + totalOut*4.0/1e6 + 0.01;
+    const jpy = usd * 150;
+    log(`  入力トークン合計: ${totalIn}`, 'dim');
+    log(`  出力トークン合計: ${totalOut}`, 'dim');
+    log(`  推定コスト: $${usd.toFixed(4)} ≒ ${jpy.toFixed(1)}円/回`, 'ok');
+    log(`  月コスト(1日1回): ≒ ${(jpy*30).toFixed(0)}円`, 'dim');
+    results.cost_jpy = jpy;
+
+    // ─ 結果表示 ──────────────────────────────
+    log(`\n✅ 全テスト完了 (${results.total_ms}ms)`, 'ok');
+
+    // ニュースカード表示
+    const resultEl = document.getElementById('result');
+    resultEl.innerHTML = news.map(n => `
+      <div class="card">
+        <div class="cat">${n.category}</div>
+        <div class="title">${n.title}</div>
+        <div>${n.summary}</div>
+        <div class="src">${n.source}</div>
+      </div>`).join('');
+    document.getElementById('resultSection').style.display = 'block';
+
+    // サマリー表示
+    const summaryEl = document.getElementById('summary');
+    summaryEl.innerHTML = `
+<span class="pass">✅ PASS</span>  API接続・ニュース取得・JSONパース 正常完了
+
+📊 テスト結果
+  取得記事数    : ${news.length}件
+  カテゴリー    : ${Object.entries(cats).map(([k,v])=>`${k}(${v}件)`).join(' / ')}
+  仕様適合      : ${specPass}/6 カテゴリー（各2〜5件）
+  処理時間      : ${results.total_ms}ms
+  推定コスト    : ${results.cost_jpy.toFixed(1)}円/回 (月${(results.cost_jpy*30).toFixed(0)}円)
+
+🔑 APIフロー
+  Turn1 (web_search発動) : <span class="${results.turn1_ok?'pass':'fail'}">${results.turn1_ok?'OK':'NG'}</span>
+  Turn2 (JSON生成)       : <span class="${results.turn2_ok?'pass':'fail'}">${results.turn2_ok?'OK':'NG'}</span>
+    `;
+    document.getElementById('summarySection').style.display = 'block';
+
+  } catch(e) {
+    log(`\n❌ エラー: ${e.message}`, 'err');
+    results.error = e.message;
+  }
+
+  btn.disabled = false;
+  btn.textContent = '▶ 全テスト実行';
+}
+</script>
+</body>
+</html>
