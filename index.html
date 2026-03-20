@@ -809,18 +809,20 @@ async function fetchNews(forceRefresh = false) {
   // ── システムプロンプト ───────────────────────
   const system = `あなたはニュースキュレーターです。
 ウェブ検索で本日(${today})のニュースを収集し、以下のJSON形式のみで返してください。
-説明文・謝罪文・コードブロックは不要です。JSONのみ出力してください。
+説明文・謝罪文・コードブロックは一切不要です。JSONのみ出力してください。
 
 {"news":[{"id":1,"category":"カテゴリー名","title":"30字以内の見出し","summary":"80字以内の要約","source":"媒体名"}]}
 
 【条件】
 - カテゴリーは 国内・国際・経済・社会・テクノロジー・スポーツ の6種類
-- 各カテゴリー2件以上5件以下。記事が見つからないカテゴリーは省略してよい
+- 各カテゴリーで見つかった記事を1件以上できるだけ多く収集する（上限なし）
+- 記事が見つからないカテゴリーは省略してよい
 - NHK・朝日・読売・毎日・産経・共同通信・日経・BBC・Reuters・AP・AFP・CNN など主要メディアを優先
 - 明らかに信頼性の低い情報源（SNS・匿名サイト）は避ける
-- 必ずJSONのみ返すこと。条件を満たせない場合も空でもJSONの形式を守ること`;
+- 記事数が少なくても必ずJSONで返すこと。絶対に空配列 {"news":[]} を返してはいけない
+- 検索結果が少ない場合は過去数日以内のニュースで補完してよい`;
 
-  const userMsg = `${today}のニュースをカテゴリー別にJSON形式で返してください。`;
+  const userMsg = `${today}の主要ニュースを各カテゴリーから1件以上収集してJSON形式で返してください。記事が少なくても必ず何か返してください。`;
 
   // タイムアウト付きfetch（デフォルト60秒）
   // AbortSignal は環境によってクローン不可のため Promise.race で実装
@@ -940,10 +942,22 @@ async function fetchNews(forceRefresh = false) {
 
     if (!finalText) throw new Error('AIからの応答が空です');
 
-    const parsed = safeParseNews(finalText);
+    let parsed = safeParseNews(finalText);
+
+    // 空配列が返ってきた場合は条件を緩めて1回リトライ
+    if (!parsed.news || parsed.news.length === 0) {
+      console.warn('[AM7] 空配列検出。条件緩和してリトライ');
+      setMsg('条件を緩めて再取得中...');
+      const retryMsg = `${today}のニュースを何でもよいので10件以上JSON形式で返してください。{"news":[...]}の形式で。`;
+      const retryData = await callAPI([{ role: 'user', content: retryMsg }]);
+      const retryText = extractText(retryData.content);
+      if (retryText) {
+        try { parsed = safeParseNews(retryText); } catch(e) { /* 元のまま続行 */ }
+      }
+    }
 
     allNews = parsed.news || [];
-    if (!allNews.length) throw new Error('ニュースデータが空です');
+    if (!allNews.length) throw new Error('ニュースデータが空です。しばらく時間をおいて再試行してください。');
 
     console.log('[AM7] 取得成功:', allNews.length, '件');
     translateCache = {};  // 新規取得時は翻訳キャッシュもクリア
