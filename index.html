@@ -955,8 +955,57 @@ function filterNews(cat, el) {
 const isIOS     = /iPad|iPhone|iPod/.test(navigator.userAgent);
 const isAndroid = /Android/.test(navigator.userAgent);
 
-// ── 無音AudioContext（画面オフ対策・iOS/Android共通）
-// オーディオセッションをアクティブに保ち、画面オフ後もJSを継続させる
+// ════════════════════════════════════════════
+// バックグラウンド再生対応
+//
+// Android Chrome の制約:
+//   Web Speech API はバックグラウンドで停止する。
+//   これはブラウザの仕様であり完全な回避は不可能。
+//
+// 対策の組み合わせ:
+//   1. Wake Lock API  … 読み上げ中は画面オフを防止（Android Chrome 84+対応）
+//   2. 無音 AudioContext … iOS向けオーディオセッション維持（iOS Safari対応）
+//   3. 画面復帰時の自動再開 … 万一止まった場合のフォールバック
+// ════════════════════════════════════════════
+
+// ── 1. Wake Lock API（Android Chrome 84+ / iOS Safari 16.4+）
+// 読み上げ中は端末の画面オフを防止する
+let _wakeLock = null;
+
+async function requestWakeLock() {
+  if (!('wakeLock' in navigator)) {
+    console.log('[AM7] WakeLock非対応端末');
+    return;
+  }
+  try {
+    _wakeLock = await navigator.wakeLock.request('screen');
+    console.log('[AM7] WakeLock取得成功');
+    _wakeLock.addEventListener('release', () => {
+      console.log('[AM7] WakeLock解放された');
+      // 読み上げ中なら再取得（画面復帰後）
+      if (isReading) requestWakeLock();
+    });
+  } catch(e) {
+    console.warn('[AM7] WakeLock取得失敗:', e.message);
+  }
+}
+
+function releaseWakeLock() {
+  if (_wakeLock) {
+    _wakeLock.release().catch(() => {});
+    _wakeLock = null;
+    console.log('[AM7] WakeLock解放');
+  }
+}
+
+// visibilitychange でWakeLockを再取得（一時的に解放される場合の対応）
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && isReading && !_wakeLock) {
+    await requestWakeLock();
+  }
+});
+
+// ── 2. 無音 AudioContext（iOS Safari 向けオーディオセッション維持）
 let _audioCtx = null;
 let _silentSrc = null;
 
@@ -966,10 +1015,7 @@ function startSilentAudio() {
       _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
     if (_audioCtx.state === 'suspended') _audioCtx.resume();
-
-    // 既存のsrcを停止してから再作成
     if (_silentSrc) { try { _silentSrc.stop(); } catch(e) {} _silentSrc = null; }
-
     const buf = _audioCtx.createBuffer(1, _audioCtx.sampleRate * 2, _audioCtx.sampleRate);
     _silentSrc = _audioCtx.createBufferSource();
     _silentSrc.buffer = buf;
@@ -984,7 +1030,7 @@ function stopSilentAudio() {
   try { if (_audioCtx)  { _audioCtx.suspend(); } } catch(e) {}
 }
 
-// ── Media Session API（ロック画面・通知センターのコントロール）
+// ── 3. Media Session API（ロック画面・通知センターのコントロール）
 function setupMediaSession(title) {
   if (!('mediaSession' in navigator)) return;
   try {
@@ -993,9 +1039,9 @@ function setupMediaSession(title) {
       artist: 'ニュース読み上げ中',
       album:  'AM7 BRIEFING',
     });
-    navigator.mediaSession.setActionHandler('pause',     () => stopReading());
-    navigator.mediaSession.setActionHandler('stop',      () => stopReading());
-    navigator.mediaSession.setActionHandler('nexttrack', () => {
+    navigator.mediaSession.setActionHandler('pause',         () => stopReading());
+    navigator.mediaSession.setActionHandler('stop',          () => stopReading());
+    navigator.mediaSession.setActionHandler('nexttrack',     () => {
       if (isReading && currentReadingIdx + 1 < filteredNews.length) {
         window.speechSynthesis.cancel();
         speakItem(currentReadingIdx + 1);
@@ -1021,44 +1067,33 @@ function clearMediaSession() {
   } catch(e) {}
 }
 
-// ── バックグラウンド復帰監視（iOS + Android 両対応）
+// ── 4. 画面復帰時の自動再開（フォールバック）
 let currentReadingIdx = -1;
 let _resumeTimer = null;
 
 function scheduleResume() {
   clearTimeout(_resumeTimer);
   _resumeTimer = setTimeout(() => {
-    if (isReading && !window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
-      console.log('[AM7] auto-resume at idx:', currentReadingIdx);
-      // AudioContextが止まっていたら再起動
+    if (!isReading) return;
+    if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+      console.log('[AM7] 自動再開: idx=', currentReadingIdx);
       if (_audioCtx && _audioCtx.state === 'suspended') {
         _audioCtx.resume().then(() => speakItem(currentReadingIdx));
       } else {
         speakItem(currentReadingIdx);
       }
     }
-  }, 500);
+  }, 600);
 }
 
-// visibilitychange: 画面復帰（iOS・Android共通）
+// 画面復帰イベント（iOS・Android共通）
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && isReading) {
     scheduleResume();
   }
 });
-
-// pageshow: Androidのバックグラウンド→フォアグラウンド復帰時
-window.addEventListener('pageshow', (e) => {
-  if (isReading) {
-    if (_audioCtx && _audioCtx.state === 'suspended') _audioCtx.resume();
-    scheduleResume();
-  }
-});
-
-// focus: Android Chromeでウィンドウがフォーカスを取り戻した時
-window.addEventListener('focus', () => {
-  if (isReading) scheduleResume();
-});
+window.addEventListener('pageshow',  () => { if (isReading) scheduleResume(); });
+window.addEventListener('focus',     () => { if (isReading) scheduleResume(); });
 
 // ── HTMLタグ・読み上げ不要な記号を除去 ─────────
 function cleanForTTS(text) {
@@ -1112,7 +1147,8 @@ function readAll() {
   isReading = true;
   document.getElementById('readAllBtn').style.display = 'none';
   document.getElementById('stopBtn').style.display    = '';
-  startSilentAudio();  // 無音再生でオーディオセッション確保
+  startSilentAudio();   // iOS: オーディオセッション維持
+  requestWakeLock();    // Android: 画面オフ防止
   speakItem(0);
 }
 
@@ -1121,7 +1157,8 @@ function readItem(i) {
   isReading = true;
   document.getElementById('readAllBtn').style.display = 'none';
   document.getElementById('stopBtn').style.display    = '';
-  startSilentAudio();  // 無音再生でオーディオセッション確保
+  startSilentAudio();   // iOS: オーディオセッション維持
+  requestWakeLock();    // Android: 画面オフ防止
   speakItem(i);
 }
 
@@ -1130,6 +1167,7 @@ function stopReading() {
   currentReadingIdx = -1;
   window.speechSynthesis.cancel();
   stopSilentAudio();
+  releaseWakeLock();    // WakeLock解放
   clearMediaSession();
   document.querySelectorAll('.news-card').forEach(el => el.classList.remove('reading'));
   document.getElementById('readAllBtn').style.display = '';
