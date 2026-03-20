@@ -555,6 +555,15 @@ input[type=range] {
     </div>
     <div class="voice-rows">
       <div class="voice-row">
+        <label>読み上げ言語</label>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button id="langJA" class="bb-btn" style="flex:1;padding:10px;font-size:12px;"
+            onclick="setLang('ja-JP')">🇯🇵 日本語</button>
+          <button id="langEN" class="bb-btn" style="flex:1;padding:10px;font-size:12px;"
+            onclick="setLang('en-US')">🇺🇸 English</button>
+        </div>
+      </div>
+      <div class="voice-row">
         <label id="rateLabel">読み上げ速度: 1.0x</label>
         <input type="range" min="0.7" max="1.8" step="0.1" value="1.0" id="rateSlider"
           oninput="document.getElementById('rateLabel').textContent='読み上げ速度: '+parseFloat(this.value).toFixed(1)+'x';saveVoice()">
@@ -609,6 +618,8 @@ let isReading = false;
     document.getElementById('volSlider').value = vVol;
     document.getElementById('volLabel').textContent = '音量: ' + Math.round(vVol * 100) + '%';
   }
+  // 言語設定復元
+  updateLangUI();
 
   // Service Worker 登録
   if ('serviceWorker' in navigator) {
@@ -628,6 +639,28 @@ function saveKey() {
   const v = document.getElementById('apiKeyInput').value.trim();
   if (v) localStorage.setItem('am7_key', v);
   closeModal('keyModal');
+}
+
+// 現在の読み上げ言語（デフォルト: 日本語）
+let ttsLang = localStorage.getItem('am7_lang') || 'ja-JP';
+
+function setLang(lang) {
+  ttsLang = lang;
+  localStorage.setItem('am7_lang', lang);
+  updateLangUI();
+}
+
+function updateLangUI() {
+  const ja = document.getElementById('langJA');
+  const en = document.getElementById('langEN');
+  if (!ja || !en) return;
+  const isJA = ttsLang === 'ja-JP';
+  ja.style.background    = isJA  ? 'var(--ink)' : 'transparent';
+  ja.style.color         = isJA  ? 'var(--paper)' : 'var(--ink)';
+  ja.style.borderColor   = isJA  ? 'var(--ink)' : 'var(--line)';
+  en.style.background    = !isJA ? 'var(--ink)' : 'transparent';
+  en.style.color         = !isJA ? 'var(--paper)' : 'var(--ink)';
+  en.style.borderColor   = !isJA ? 'var(--ink)' : 'var(--line)';
 }
 
 function saveVoice() {
@@ -1150,7 +1183,7 @@ function speakItem(i) {
   // HTMLタグ・記号を除去してから読み上げ
   const spokenText = `${cleanForTTS(item.category)}。${cleanForTTS(item.title)}。${cleanForTTS(item.summary)}`;
   const utt = new SpeechSynthesisUtterance(spokenText);
-  utt.lang   = 'ja-JP';
+  utt.lang   = ttsLang;  // 言語切り替え対応（ja-JP / en-US）
   utt.rate   = parseFloat(document.getElementById('rateSlider').value);
   utt.volume = parseFloat(document.getElementById('volSlider').value);
   utt.onend  = () => { if (isReading) speakItem(i + 1); };
