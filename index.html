@@ -815,60 +815,67 @@ async function fetchNews(forceRefresh = false) {
     return res.json();
   }
 
-  // tool_result を組み立てる
-  // web_search はサーバーサイドで実行済み。
-  // content フィールドは省略し、tool_use_id だけ返すことで
-  // モデルが検索結果を参照して回答を生成できる。
+  // web_search_20250305 はサーバーサイド実行型ツール。
+  // モデルが tool_use を返した時点で検索は完了しており、
+  // 結果は tool_use ブロックの content に含まれている。
+  // tool_result を返す必要はなく、assistant の応答をそのまま
+  // 会話履歴に追加して次のターンで JSON 生成を促すだけでよい。
   function buildToolResults(contentBlocks) {
     return contentBlocks
       .filter(b => b.type === 'tool_use')
-      .map(b => {
-        const result = { type: 'tool_result', tool_use_id: b.id };
-        // web_search の場合は content を省略（省略=成功とみなされる）
-        // その他のツールの場合は空文字を渡す
-        if (b.name !== 'web_search') result.content = '';
-        return result;
-      });
+      .map(b => ({
+        type: 'tool_result',
+        tool_use_id: b.id,
+        content: [{ type: 'text', text: 'Search completed.' }]
+      }));
   }
 
-  // マルチターンでfinalTextを取得（最大4ターン）
+  // マルチターンでfinalTextを取得（最大5ターン）
   async function fetchFinalText() {
-    const messages = [{ role:'user', content: userMsg }];
+    const messages = [{ role: 'user', content: userMsg }];
 
-    for (let turn = 1; turn <= 4; turn++) {
-      console.log(`[AM7] Turn${turn} 開始 messages:`, messages.length);
-      setMsg(turn === 1 ? 'ウェブを検索中...' : turn === 2 ? '検索結果を要約中...' : '最終処理中...');
+    for (let turn = 1; turn <= 5; turn++) {
+      console.log(`[AM7] Turn${turn} 開始`);
+      setMsg(turn === 1 ? 'ウェブを検索中...' : turn <= 3 ? '検索結果を要約中...' : '最終処理中...');
 
       const data = await callAPI(messages);
       const types = data.content?.map(b => b.type) || [];
       const text  = extractText(data.content);
       console.log(`[AM7] Turn${turn} stop_reason:${data.stop_reason} types:[${types}] text_len:${text.length}`);
 
-      // エラーレスポンス確認
+      // APIレベルのエラー
       if (data.error) throw new Error('APIエラー: ' + JSON.stringify(data.error));
 
       // end_turn → テキスト返却
       if (data.stop_reason === 'end_turn') {
-        if (!text) throw new Error(`Turn${turn}: テキストが空です`);
-        return text;
+        if (text) return text;
+        throw new Error(`Turn${turn}: レスポンスのテキストが空です`);
       }
 
-      // tool_use → tool_result を追加して次のターンへ
+      // tool_use → 会話履歴に追加して続行
       if (data.stop_reason === 'tool_use') {
+        // assistant の応答（tool_use を含む）を履歴に追加
+        messages.push({ role: 'assistant', content: data.content });
+        // tool_result を返してモデルに JSON 生成を促す
         const toolResults = buildToolResults(data.content);
         console.log(`[AM7] Turn${turn} tool_results:`, JSON.stringify(toolResults));
-        // assistantの応答とtool_resultを履歴に追加
-        messages.push({ role: 'assistant', content: data.content });
-        messages.push({ role: 'user',      content: toolResults  });
+        messages.push({ role: 'user', content: toolResults });
         continue;
       }
 
-      // 予期しないstop_reason
+      // max_tokens 超過など
+      if (data.stop_reason === 'max_tokens') {
+        // 途中まで生成されたテキストがあれば返す（safeParseNews で修復）
+        if (text) { console.warn('[AM7] max_tokens超過。部分テキストで続行'); return text; }
+        throw new Error('max_tokens超過かつテキストが空です');
+      }
+
+      // その他の stop_reason
       if (text) return text;
       throw new Error(`予期しないstop_reason: ${data.stop_reason}`);
     }
 
-    throw new Error('最大ターン数(4)を超えました');
+    throw new Error('最大ターン数(5)を超えました');
   }
 
   try {
