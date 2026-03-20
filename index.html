@@ -741,20 +741,19 @@ async function fetchNews(forceRefresh = false) {
   const today = new Date().toLocaleDateString('ja-JP',{year:'numeric',month:'long',day:'numeric'});
 
   // ── システムプロンプト ───────────────────────
-  const system = `あなたはニュースキュレーターです。
-ウェブ検索で${today}のニュースを収集し、以下のJSON形式のみで返してください。
-説明文・謝罪文・マークダウン記法は一切不要です。必ずJSONだけ返してください。
+  const system = `ニュースキュレーター。JSONのみ返せ。説明文不要。
 
-{"news":[{"id":1,"category":"国内/国際/経済/社会/テクノロジー/スポーツ","title":"30字以内の見出し","summary":"80字以内の要約","source":"媒体名"}]}
+{"news":[{"id":1,"category":"国内/国際/経済/社会/テクノロジー/スポーツ","title":"30字以内","summary":"80字以内","source":"媒体名"}]}
 
-条件:
-- カテゴリーは「国内」「国際」「経済」「社会」「テクノロジー」「スポーツ」の6種類
-- 各カテゴリーごとに1件以上9件以下で収集すること
-- ${today}当日のニュースが存在するカテゴリーのみ収集する。記事が見つからないカテゴリーは0件でよい
-- ${today}当日のニュースを優先。当日分が不足の場合は直近のニュースで補完してよい
-- どんな状況でも必ずJSON形式で返すこと。返せない場合でもJSONの骨格を維持すること`;
+【必須条件】
+- カテゴリー: 国内・国際・経済・社会・テクノロジー・スポーツの6種類
+- 各カテゴリー5件以上9件以下。5件に満たない場合は直近ニュースで補完すること
+- 信頼できる公式メディアのみ使用: NHK・朝日・読売・毎日・産経・時事通信・共同通信・日経・TBS・フジ・テレ朝・BBC・Reuters・AP・AFP・CNN
+- SNS投稿・まとめサイト・出所不明・未確認情報は除外
+- 複数メディアが報道している事実のみ採用（フェイクニュース排除）
+- JSONのみ出力。どんな場合でもJSONの骨格を維持すること`;
 
-  const userMsg = `${today}の主要ニュースをカテゴリー別（国内・国際・経済・社会・テクノロジー・スポーツ）に各1〜9件でJSON形式で返してください。記事がないカテゴリーは省略可。`;
+  const userMsg = `${today}のニュースをカテゴリー別各5〜9件、信頼できる公式メディアのみJSON形式で。`;
 
   async function callAPI(messages) {
     const res = await fetch(API_URL, {
@@ -767,7 +766,7 @@ async function fetchNews(forceRefresh = false) {
       },
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 6000,  // 各カテゴリー最大9件×6カテゴリー対応
+        max_tokens: 3000,  // 5〜9件×6カテゴリー対応（コスト削減）
         tools: [{ type: 'web_search_20250305', name: 'web_search' }],
         system,
         messages
