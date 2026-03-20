@@ -588,10 +588,15 @@ const CAT_COLOR = {
 };
 
 // ════════════════════════════════════
-// STATE
+// STATE（全グローバル変数をここで宣言してTDZを防ぐ）
 // ════════════════════════════════════
 let allNews = [], filteredNews = [];
 let isReading = false;
+let currentReadingIdx = -1;
+let _resumeTimer = null;
+let _wakeLock    = null;
+let _audioCtx    = null;
+let _silentSrc   = null;
 
 // ════════════════════════════════════
 // INIT
@@ -1039,7 +1044,7 @@ const isAndroid = /Android/.test(navigator.userAgent);
 
 // ── 1. Wake Lock API（Android Chrome 84+ / iOS Safari 16.4+）
 // 読み上げ中は端末の画面オフを防止する
-let _wakeLock = null;
+// _wakeLock は STATE セクションで宣言済み
 
 async function requestWakeLock() {
   if (!('wakeLock' in navigator)) {
@@ -1075,8 +1080,7 @@ document.addEventListener('visibilitychange', async () => {
 });
 
 // ── 2. 無音 AudioContext（iOS Safari 向けオーディオセッション維持）
-let _audioCtx = null;
-let _silentSrc = null;
+// _audioCtx / _silentSrc は STATE セクションで宣言済み
 
 function startSilentAudio() {
   try {
@@ -1137,8 +1141,7 @@ function clearMediaSession() {
 }
 
 // ── 4. 画面復帰時の自動再開（フォールバック）
-let currentReadingIdx = -1;
-let _resumeTimer = null;
+// currentReadingIdx / _resumeTimer は STATE セクションで宣言済み
 
 function scheduleResume() {
   clearTimeout(_resumeTimer);
