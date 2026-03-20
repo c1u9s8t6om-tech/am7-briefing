@@ -644,13 +644,37 @@ function extractText(content) {
 }
 
 function safeParseNews(raw) {
-  const s = raw.replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();
-  try { return JSON.parse(s); }
-  catch {
-    const m = s.match(/\{[\s\S]*\}/);
-    if (m) return JSON.parse(m[0]);
-    throw new Error('JSONパース失敗\n' + s.slice(0,300));
+  if (!raw) throw new Error('レスポンスが空です');
+  // コードブロック除去・前後トリム
+  let s = raw
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/, '')
+    .trim();
+
+  // 直接パース試行
+  try { return JSON.parse(s); } catch {}
+
+  // {"news":...} の部分を抽出して試行
+  const m = s.match(/\{[\s\S]*?"news"\s*:\s*\[[\s\S]*\]/);
+  if (m) {
+    // 末尾に } が足りない場合を補完
+    const candidates = [m[0], m[0] + '}', m[0] + ']}', m[0] + ']}'];
+    for (const c of candidates) {
+      try { return JSON.parse(c); } catch {}
+    }
   }
+
+  // news 配列だけを抽出して再構成
+  const arrMatch = s.match(/"news"\s*:\s*(\[[\s\S]*?\])/);
+  if (arrMatch) {
+    try {
+      const arr = JSON.parse(arrMatch[1]);
+      if (Array.isArray(arr)) return { news: arr };
+    } catch {}
+  }
+
+  console.error('[AM7] parse failed. raw:', s.slice(0, 500));
+  throw new Error('JSONパース失敗: ' + s.slice(0, 120));
 }
 
 function setMsg(msg) {
@@ -756,60 +780,76 @@ async function fetchNews(forceRefresh = false) {
     return res.json();
   }
 
-  // マルチターンでfinalTextを取得
+  // tool_result を組み立てる
+  // web_search はサーバーサイドで実行済み。
+  // content フィールドは省略し、tool_use_id だけ返すことで
+  // モデルが検索結果を参照して回答を生成できる。
+  function buildToolResults(contentBlocks) {
+    return contentBlocks
+      .filter(b => b.type === 'tool_use')
+      .map(b => {
+        const result = { type: 'tool_result', tool_use_id: b.id };
+        // web_search の場合は content を省略（省略=成功とみなされる）
+        // その他のツールの場合は空文字を渡す
+        if (b.name !== 'web_search') result.content = '';
+        return result;
+      });
+  }
+
+  // マルチターンでfinalTextを取得（最大4ターン）
   async function fetchFinalText() {
-    const d1 = await callAPI([{ role:'user', content: userMsg }]);
+    const messages = [{ role:'user', content: userMsg }];
 
-    if (d1.stop_reason === 'end_turn') {
-      return extractText(d1.content);
-    }
+    for (let turn = 1; turn <= 4; turn++) {
+      console.log(`[AM7] Turn${turn} 開始 messages:`, messages.length);
+      setMsg(turn === 1 ? 'ウェブを検索中...' : turn === 2 ? '検索結果を要約中...' : '最終処理中...');
 
-    if (d1.stop_reason === 'tool_use') {
-      setMsg('検索結果を要約中...');
-      const toolResults = d1.content
-        .filter(b => b.type === 'tool_use')
-        .map(b => ({ type:'tool_result', tool_use_id: b.id, content: b.content || '' }));
+      const data = await callAPI(messages);
+      const types = data.content?.map(b => b.type) || [];
+      const text  = extractText(data.content);
+      console.log(`[AM7] Turn${turn} stop_reason:${data.stop_reason} types:[${types}] text_len:${text.length}`);
 
-      const d2 = await callAPI([
-        { role:'user',      content: userMsg     },
-        { role:'assistant', content: d1.content  },
-        { role:'user',      content: toolResults }
-      ]);
+      // エラーレスポンス確認
+      if (data.error) throw new Error('APIエラー: ' + JSON.stringify(data.error));
 
-      // d2もtool_useだった場合はもう一段
-      if (d2.stop_reason === 'tool_use') {
-        setMsg('最終処理中...');
-        const tr2 = d2.content
-          .filter(b => b.type === 'tool_use')
-          .map(b => ({ type:'tool_result', tool_use_id: b.id, content: b.content || '' }));
-        const d3 = await callAPI([
-          { role:'user',      content: userMsg     },
-          { role:'assistant', content: d1.content  },
-          { role:'user',      content: toolResults },
-          { role:'assistant', content: d2.content  },
-          { role:'user',      content: tr2         }
-        ]);
-        return extractText(d3.content);
+      // end_turn → テキスト返却
+      if (data.stop_reason === 'end_turn') {
+        if (!text) throw new Error(`Turn${turn}: テキストが空です`);
+        return text;
       }
 
-      return extractText(d2.content);
+      // tool_use → tool_result を追加して次のターンへ
+      if (data.stop_reason === 'tool_use') {
+        const toolResults = buildToolResults(data.content);
+        console.log(`[AM7] Turn${turn} tool_results:`, JSON.stringify(toolResults));
+        // assistantの応答とtool_resultを履歴に追加
+        messages.push({ role: 'assistant', content: data.content });
+        messages.push({ role: 'user',      content: toolResults  });
+        continue;
+      }
+
+      // 予期しないstop_reason
+      if (text) return text;
+      throw new Error(`予期しないstop_reason: ${data.stop_reason}`);
     }
 
-    return extractText(d1.content);
+    throw new Error('最大ターン数(4)を超えました');
   }
 
   try {
     const finalText = await fetchFinalText();
+    console.log('[AM7] finalText length:', finalText?.length, 'preview:', finalText?.slice(0,100));
 
     if (!finalText) throw new Error('AIからの応答が空です');
 
-    // JSON部分だけ抽出を試みる（謝罪文が混入しても対応）
+    // JSON部分だけ抽出（謝罪文混入にも対応）
     let parsed;
     try {
       parsed = safeParseNews(finalText);
-    } catch {
-      // JSONが見つからない場合はリトライ（JSONのみ要求）
+    } catch (parseErr) {
+      console.warn('[AM7] 初回パース失敗:', parseErr.message, '→ リトライ');
       setMsg('再試行中...');
+      // JSONだけ返すよう指示して再試行
       const retryRes = await fetch(API_URL, {
         method: 'POST',
         headers: {
@@ -820,22 +860,22 @@ async function fetchNews(forceRefresh = false) {
         },
         body: JSON.stringify({
           model: 'claude-haiku-4-5-20251001',
-          max_tokens: 2500,
-          system: 'JSONのみ返せ。説明不要。',
-          messages: [
-            { role:'user', content: userMsg },
-            { role:'assistant', content: finalText },
-            { role:'user', content: '上記の内容をJSON形式{"news":[...]}のみで出力し直してください。説明文は不要です。' }
-          ]
+          max_tokens: 4000,
+          system: '以下のテキストからJSONオブジェクト{"news":[...]}の部分だけを抽出して、JSONのみ返してください。説明文は不要です。',
+          messages: [{ role:'user', content: finalText }]
         })
       });
+      if (!retryRes.ok) throw new Error('リトライAPI失敗: ' + retryRes.status);
       const retryData = await retryRes.json();
-      parsed = safeParseNews(extractText(retryData.content));
+      const retryText = extractText(retryData.content);
+      console.log('[AM7] retryText:', retryText?.slice(0,100));
+      parsed = safeParseNews(retryText);
     }
 
     allNews = parsed.news || [];
     if (!allNews.length) throw new Error('ニュースデータが空です');
 
+    console.log('[AM7] 取得成功:', allNews.length, '件');
     saveCache(allNews);
     filteredNews = [...allNews];
     renderNews(filteredNews);
@@ -847,12 +887,12 @@ async function fetchNews(forceRefresh = false) {
     document.getElementById('readAllBtn').disabled = false;
 
   } catch (err) {
-    console.error('[AM7]', err);
+    console.error('[AM7] 取得エラー:', err);
     document.getElementById('feedWrap').innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">⚠️</div>
         <div class="state-msg">取得に失敗しました<br>
-          <span style="font-size:10px;display:block;margin-top:8px;color:var(--accent)">${err.message.slice(0,120)}</span>
+          <span style="font-size:10px;display:block;margin-top:8px;color:var(--accent)">${err.message.slice(0,150)}</span>
         </div>
       </div>`;
   }
