@@ -645,36 +645,49 @@ function extractText(content) {
 
 function safeParseNews(raw) {
   if (!raw) throw new Error('レスポンスが空です');
-  // コードブロック除去・前後トリム
-  let s = raw
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/, '')
-    .trim();
 
-  // 直接パース試行
-  try { return JSON.parse(s); } catch {}
+  // Step1: コードブロック・前後テキストを除去して直接パース
+  let s = raw.replace(/```(?:json)?\n?/gi, '').trim();
+  try { const r = JSON.parse(s); if (r && r.news) return r; } catch {}
 
-  // {"news":...} の部分を抽出して試行
-  const m = s.match(/\{[\s\S]*?"news"\s*:\s*\[[\s\S]*\]/);
+  // Step2: {"news":[...]} を最長マッチで抽出
+  const m = s.match(/\{[^{}]*"news"\s*:\s*\[([\s\S]*?)\][^{}]*\}/);
   if (m) {
-    // 末尾に } が足りない場合を補完
-    const candidates = [m[0], m[0] + '}', m[0] + ']}', m[0] + ']}'];
-    for (const c of candidates) {
-      try { return JSON.parse(c); } catch {}
-    }
+    try { const r = JSON.parse(m[0]); if (r && r.news) return r; } catch {}
   }
 
-  // news 配列だけを抽出して再構成
-  const arrMatch = s.match(/"news"\s*:\s*(\[[\s\S]*?\])/);
-  if (arrMatch) {
+  // Step3: "news": [...] の配列部分だけ取り出して再構成
+  const am = s.match(/"news"\s*:\s*(\[[\s\S]*?\](?=\s*[,}]|\s*$))/);
+  if (am) {
+    // 途中で切れた配列を修復（最後の完全なオブジェクトまで）
+    let arr = am[1];
+    // 末尾の不完全オブジェクトを除去して閉じる
+    arr = arr.replace(/,?\s*\{[^{}]*$/, '').replace(/,\s*$/, '') + ']';
     try {
-      const arr = JSON.parse(arrMatch[1]);
-      if (Array.isArray(arr)) return { news: arr };
+      const parsed = JSON.parse(arr);
+      if (Array.isArray(parsed) && parsed.length > 0) return { news: parsed };
     } catch {}
+    // それでも失敗なら完全なオブジェクトだけ抽出
+    const items = [];
+    const objRe = /\{[^{}]*"category"[^{}]*"title"[^{}]*\}/g;
+    let obj;
+    while ((obj = objRe.exec(s)) !== null) {
+      try { items.push(JSON.parse(obj[0])); } catch {}
+    }
+    if (items.length > 0) return { news: items };
   }
 
-  console.error('[AM7] parse failed. raw:', s.slice(0, 500));
-  throw new Error('JSONパース失敗: ' + s.slice(0, 120));
+  // Step4: 個別のニュースオブジェクトを総当たりで拾う（最終手段）
+  const items = [];
+  const objRe = /\{[^{}]*"category"[^{}]*"title"[^{}]*\}/g;
+  let obj;
+  while ((obj = objRe.exec(s)) !== null) {
+    try { items.push(JSON.parse(obj[0])); } catch {}
+  }
+  if (items.length > 0) { console.log('[AM7] Step4で', items.length, '件抽出'); return { news: items }; }
+
+  console.error('[AM7] parse failed:', s.slice(0, 300));
+  throw new Error('JSONパース失敗: ' + s.slice(0, 80));
 }
 
 function setMsg(msg) {
@@ -864,67 +877,8 @@ async function fetchNews(forceRefresh = false) {
 
     if (!finalText) throw new Error('AIからの応答が空です');
 
-    // JSON部分だけ抽出（謝罪文混入にも対応）
-    let parsed;
-    try {
-      parsed = safeParseNews(finalText);
-    } catch (parseErr) {
-      console.warn('[AM7] 初回パース失敗:', parseErr.message, '→ リトライ');
-      setMsg('再試行中（3秒待機）...');
-
-      // レート制限回避のため3秒待機してからリトライ
-      await new Promise(r => setTimeout(r, 3000));
-
-      const retryRes = await fetch(API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': key,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 1500,   // JSON整形のみなので1500で十分
-          system: 'テキストから{"news":[...]}のJSONのみ抽出して返せ。説明不要。',
-          messages: [{ role:'user', content: finalText }]
-        })
-      });
-
-      // 429の場合はRetry-Afterを読んで待機後に再試行
-      if (retryRes.status === 429) {
-        const retryAfter = parseInt(retryRes.headers.get('retry-after') || '10', 10);
-        const wait = (retryAfter + 1) * 1000;
-        console.warn(`[AM7] 429 レート制限。${retryAfter}秒後に再試行`);
-        setMsg(`レート制限中。${retryAfter}秒後に再試行...`);
-        await new Promise(r => setTimeout(r, wait));
-
-        const retryRes2 = await fetch(API_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': key,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true'
-          },
-          body: JSON.stringify({
-            model: 'claude-haiku-4-5-20251001',
-            max_tokens: 1500,
-            system: 'テキストから{"news":[...]}のJSONのみ抽出して返せ。説明不要。',
-            messages: [{ role:'user', content: finalText }]
-          })
-        });
-        if (!retryRes2.ok) throw new Error('リトライAPI失敗: ' + retryRes2.status);
-        const retryData2 = await retryRes2.json();
-        parsed = safeParseNews(extractText(retryData2.content));
-      } else {
-        if (!retryRes.ok) throw new Error('リトライAPI失敗: ' + retryRes.status);
-        const retryData = await retryRes.json();
-        const retryText = extractText(retryData.content);
-        console.log('[AM7] retryText:', retryText?.slice(0,100));
-        parsed = safeParseNews(retryText);
-      }
-    }
+    // safeParseNews が多段フォールバックで対応するので追加APIコールは不要
+    const parsed = safeParseNews(finalText);
 
     allNews = parsed.news || [];
     if (!allNews.length) throw new Error('ニュースデータが空です');
