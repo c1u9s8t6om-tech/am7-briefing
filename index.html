@@ -1238,6 +1238,24 @@ Summary: ${item.summary}`
   }
 }
 
+// 実際に発話する共通関数（speakItem の外で定義してコールバックから安全に呼べるようにする）
+function doSpeak(item, titleText, summaryText, lang, nextIdx) {
+  window.speechSynthesis.cancel(); // 念のため前の発話をキャンセル
+  const spokenText = lang === 'en-US'
+    ? `${cleanForTTS(titleText)}. ${cleanForTTS(summaryText)}`
+    : `${cleanForTTS(item.category)}。${cleanForTTS(titleText)}。${cleanForTTS(summaryText)}`;
+  const utt = new SpeechSynthesisUtterance(spokenText);
+  utt.lang   = lang;
+  utt.rate   = parseFloat(document.getElementById('rateSlider').value);
+  utt.volume = parseFloat(document.getElementById('volSlider').value);
+  utt.onend  = () => { if (isReading) speakItem(nextIdx); };
+  utt.onerror = (e) => {
+    console.warn('[AM7] TTS error:', e.error);
+    if (isReading) speakItem(nextIdx); // エラーでも次へ進む
+  };
+  window.speechSynthesis.speak(utt);
+}
+
 function speakItem(i) {
   if (!isReading || i >= filteredNews.length) { finishReading(); return; }
 
@@ -1261,42 +1279,32 @@ function speakItem(i) {
   // Media Session更新
   setupMediaSession(item.title);
 
-  // 言語設定に応じて日本語/英語で読み上げ
-  function doSpeak(titleText, summaryText, lang) {
-    const spokenText = lang === 'en-US'
-      ? `${cleanForTTS(titleText)}. ${cleanForTTS(summaryText)}`
-      : `${cleanForTTS(item.category)}。${cleanForTTS(titleText)}。${cleanForTTS(summaryText)}`;
-    const utt = new SpeechSynthesisUtterance(spokenText);
-    utt.lang   = lang;
-    utt.rate   = parseFloat(document.getElementById('rateSlider').value);
-    utt.volume = parseFloat(document.getElementById('volSlider').value);
-    utt.onend  = () => { if (isReading) speakItem(i + 1); };
-    window.speechSynthesis.speak(utt);
-  }
-
   if (ttsLang === 'en-US') {
-    // 英語設定: 翻訳してから読み上げ（キャッシュあれば即時）
+    // 英語設定: キャッシュ確認 → なければ翻訳してから読み上げ
     const cacheKey = String(item.id) + item.title;
     if (translateCache[cacheKey]) {
-      // キャッシュヒット → 即時読み上げ
+      // キャッシュヒット → 即時
       const c = translateCache[cacheKey];
-      doSpeak(c.title_en, c.summary_en, 'en-US');
+      doSpeak(item, c.title_en, c.summary_en, 'en-US', i + 1);
     } else {
-      // 未翻訳 → 翻訳してから読み上げ
+      // 未翻訳 → APIで翻訳
       setMsg('翻訳中...');
       translateItem(item).then(translated => {
-        if (!isReading) return; // 翻訳中に停止された場合
+        if (!isReading) return;
         if (translated && translated.title_en) {
-          doSpeak(translated.title_en, translated.summary_en, 'en-US');
+          doSpeak(item, translated.title_en, translated.summary_en, 'en-US', i + 1);
         } else {
-          // 翻訳失敗 → 日本語にフォールバック
-          doSpeak(item.title, item.summary, 'ja-JP');
+          // 翻訳失敗 → 日本語フォールバック
+          console.warn('[AM7] 翻訳失敗。日本語で読み上げ');
+          doSpeak(item, item.title, item.summary, 'ja-JP', i + 1);
         }
+      }).catch(() => {
+        if (isReading) doSpeak(item, item.title, item.summary, 'ja-JP', i + 1);
       });
     }
   } else {
-    // 日本語設定
-    doSpeak(item.title, item.summary, 'ja-JP');
+    // 日本語
+    doSpeak(item, item.title, item.summary, 'ja-JP', i + 1);
   }
 }
 
