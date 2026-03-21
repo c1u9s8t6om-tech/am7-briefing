@@ -770,13 +770,18 @@ async function fetchNews(forceRefresh = false) {
   if (!forceRefresh) {
     const cached = loadCache();
     if (cached) {
-      allNews = cached;
-      filteredNews = [...allNews];
-      renderNews(filteredNews);
-      updateTicker(allNews);
-      document.getElementById('readAllBtn').disabled = false;
-      document.getElementById('lastUpdated').textContent = '今日取得済（キャッシュ）';
-      return;
+      // キャッシュに title_en がない場合（旧形式）は再取得
+      const hasEnglish = cached.length > 0 && cached[0].title_en;
+      if (hasEnglish) {
+        allNews = cached;
+        filteredNews = [...allNews];
+        renderNews(filteredNews);
+        updateTicker(allNews);
+        document.getElementById('readAllBtn').disabled = false;
+        document.getElementById('lastUpdated').textContent = '今日取得済（キャッシュ）';
+        return;
+      }
+      console.log('[AM7] キャッシュに英語フィールドなし。再取得します');
     }
   }
 
@@ -1064,13 +1069,18 @@ async function requestWakeLock() {
     console.log('[AM7] WakeLock非対応端末');
     return;
   }
+  // すでに有効なWakeLockがあれば再取得しない
+  if (_wakeLock && _wakeLock.released === false) return;
   try {
     _wakeLock = await navigator.wakeLock.request('screen');
     console.log('[AM7] WakeLock取得成功');
     _wakeLock.addEventListener('release', () => {
-      console.log('[AM7] WakeLock解放された');
-      // 読み上げ中なら再取得（画面復帰後）
-      if (isReading) requestWakeLock();
+      console.log('[AM7] WakeLock解放。読み上げ中なら再取得');
+      _wakeLock = null;
+      // 読み上げ中かつ画面が表示状態なら即再取得
+      if (isReading && document.visibilityState === 'visible') {
+        requestWakeLock();
+      }
     });
   } catch(e) {
     console.warn('[AM7] WakeLock取得失敗:', e.message);
@@ -1247,24 +1257,24 @@ function speakItem(i) {
   }
 }
 
-function readAll() {
+async function readAll() {
   if (!filteredNews.length) return;
   stopReading();
   isReading = true;
   document.getElementById('readAllBtn').style.display = 'none';
   document.getElementById('stopBtn').style.display    = '';
-  startSilentAudio();   // iOS: オーディオセッション維持
-  requestWakeLock();    // Android: 画面オフ防止
+  startSilentAudio();        // iOS: オーディオセッション維持
+  await requestWakeLock();   // Android: WakeLock取得を待ってから読み上げ開始
   speakItem(0);
 }
 
-function readItem(i) {
+async function readItem(i) {
   stopReading();
   isReading = true;
   document.getElementById('readAllBtn').style.display = 'none';
   document.getElementById('stopBtn').style.display    = '';
-  startSilentAudio();   // iOS: オーディオセッション維持
-  requestWakeLock();    // Android: 画面オフ防止
+  startSilentAudio();        // iOS: オーディオセッション維持
+  await requestWakeLock();   // Android: WakeLock取得を待ってから読み上げ開始
   speakItem(i);
 }
 
